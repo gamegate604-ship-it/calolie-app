@@ -1,0 +1,20 @@
+[project]
+name = "calolie-app"
+version = "1.0.0"
+description = "Ancient-Rome dark-themed calorie tracker"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+]
+
+[project.scripts]
+calolie = "food_log_gui:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
