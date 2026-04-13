@@ -1,7 +1,8 @@
 # Calolie — カロリー記録アプリ
 
 古代ローマをテーマにしたダークスタイルのカロリートラッカーです。  
-食事の摂取カロリーと運動による消費カロリーを記録し、日ごとの収支をグラフで確認できます。
+食事の摂取カロリーと運動による消費カロリーを記録し、日ごとの収支をグラフで確認できます。  
+**スマートフォンのブラウザからも利用できます。**
 
 ## 機能
 
@@ -13,40 +14,53 @@
 - グループ化された記録一覧（摂取 / 消費セクション）
 - 摂取 vs 消費のグループ棒グラフ
 
-## セットアップ
+---
+
+## Streamlit Web アプリ（推奨・スマホ対応）
+
+### ローカルで起動する
 
 ```bash
-# リポジトリをクローン
 git clone https://github.com/gamegate604-ship-it/calolie-app.git
 cd calolie-app
 
 # uv で環境を構築（推奨）
 uv sync
-
-# 起動
-uv run python food_log_gui.py
+uv run streamlit run app.py
 ```
+
+起動後、ブラウザで `http://localhost:8501` を開きます。  
+同じ Wi-Fi 内のスマートフォンからは `http://<MacのIPアドレス>:8501` でアクセスできます。
 
 ### pip を使う場合
 
 ```bash
-pip install matplotlib numpy
-python food_log_gui.py
+pip install streamlit matplotlib numpy pandas
+streamlit run app.py
 ```
 
-## グラフ表示
+---
 
-アプリ内の **グラフ** ボタン、またはコマンドラインから:
+## Streamlit Cloud へのデプロイ（無料・外出先でも利用可能）
+
+1. [share.streamlit.io](https://share.streamlit.io) にGitHubアカウントでログイン
+2. **New app** → このリポジトリを選択 → Main file: `app.py` → **Deploy**
+3. 発行されたURL（例: `https://calolie-app.streamlit.app`）をスマホのホーム画面に追加
+
+---
+
+## デスクトップアプリ（Tkinter）
 
 ```bash
-uv run python calorie_graph.py
+uv run python food_log_gui.py
 ```
+
+---
 
 ## 動作環境
 
 - Python 3.11+
-- Tkinter（標準ライブラリ）
-- matplotlib, numpy
+- streamlit, matplotlib, numpy, pandas
 
 ## ライセンス
 
