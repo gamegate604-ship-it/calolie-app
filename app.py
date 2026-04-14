@@ -59,7 +59,7 @@ NUTRITION: dict[str, dict[str, float]] = {
     "りんご(1/2個100g)":      {"kcal":  61, "protein":  0.2, "fat":  0.2, "carbs": 16.2, "fiber": 1.9},
     "みかん(2個150g)":        {"kcal":  71, "protein":  0.9, "fat":  0.2, "carbs": 17.9, "fiber": 1.5},
     "いちご(10粒150g)":       {"kcal":  51, "protein":  1.4, "fat":  0.2, "carbs": 12.8, "fiber": 1.7},
-    "アボカド(1/2個70g)":     {"kcal": 115, "protein":  1.5, "fat": 11.6, "carbs":  4.1, "fiber": 4.1},
+    "アボカド(1/2個70g)":     {"kcal": 131, "protein":  1.5, "fat": 13.1, "carbs":  3.3, "fiber": 3.8},
     "フルーツ盛り(150g)":     {"kcal":  87, "protein":  0.8, "fat":  0.2, "carbs": 21.5, "fiber": 1.8},
     "チョコレート(25g)":      {"kcal": 136, "protein":  1.7, "fat":  8.5, "carbs": 14.5, "fiber": 0.9},
     "アイスクリーム(100ml)":  {"kcal": 180, "protein":  3.5, "fat":  8.0, "carbs": 24.0, "fiber": 0.0},
@@ -69,6 +69,9 @@ NUTRITION: dict[str, dict[str, float]] = {
     "オレンジジュース(200ml)":{"kcal":  84, "protein":  0.8, "fat":  0.2, "carbs": 20.0, "fiber": 0.4},
     "コーヒー(200ml)":        {"kcal":   8, "protein":  0.4, "fat":  0.0, "carbs":  1.1, "fiber": 0.0},
     "緑茶・紅茶(200ml)":      {"kcal":   4, "protein":  0.2, "fat":  0.0, "carbs":  0.8, "fiber": 0.0},
+    "ウインナー1本(20g)":     {"kcal":  64, "protein":  2.3, "fat":  5.7, "carbs":  0.7, "fiber": 0.0},
+    "ウインナー3本(60g)":     {"kcal": 193, "protein":  6.9, "fat": 17.1, "carbs":  2.0, "fiber": 0.0},
+    "ウインナー5本(100g)":    {"kcal": 321, "protein": 11.5, "fat": 28.5, "carbs":  3.3, "fiber": 0.0},
 }
 FOOD_OPTIONS = sorted(NUTRITION.keys())
 _DFLT_FOOD   = "バナナ(1本100g)"
@@ -458,25 +461,28 @@ with st.sidebar:
             st.text_input("食べ物名", placeholder="例: タピオカ 🧋",
                            key=f"w_custom_{fv}")
 
-        kcal_init = int(st.session_state.get(f"w_kcal_{fv}")
-                        or NUTRITION.get(food_choice, {}).get("kcal", 0))
-        st.number_input("🔥 カロリー (kcal)", value=kcal_init,
+        if f"w_kcal_{fv}" not in st.session_state:
+            st.session_state[f"w_kcal_{fv}"] = int(
+                NUTRITION.get(food_choice, {}).get("kcal", 0))
+        st.number_input("🔥 カロリー (kcal)",
                          min_value=0, step=5, key=f"w_kcal_{fv}", on_change=_on_kcal)
 
         nutr = st.session_state[f"nutr_{fv}"]
         if is_custom:
+            for _k, _v in [(f"w_np_{fv}",  float(nutr["protein"])),
+                           (f"w_nf_{fv}",  float(nutr["fat"])),
+                           (f"w_nc_{fv}",  float(nutr["carbs"])),
+                           (f"w_nfi_{fv}", float(nutr["fiber"]))]:
+                if _k not in st.session_state:
+                    st.session_state[_k] = _v
             st.markdown('<p class="sec-head">栄養素（手動入力）</p>', unsafe_allow_html=True)
             c1, c2 = st.columns(2)
             with c1:
-                st.number_input("タンパク質 g", value=float(nutr["protein"]),
-                                 min_value=0.0, step=0.1, key=f"w_np_{fv}")
-                st.number_input("炭水化物 g",   value=float(nutr["carbs"]),
-                                 min_value=0.0, step=0.1, key=f"w_nc_{fv}")
+                st.number_input("タンパク質 g", min_value=0.0, step=0.1, key=f"w_np_{fv}")
+                st.number_input("炭水化物 g",   min_value=0.0, step=0.1, key=f"w_nc_{fv}")
             with c2:
-                st.number_input("脂質 g",     value=float(nutr["fat"]),
-                                 min_value=0.0, step=0.1, key=f"w_nf_{fv}")
-                st.number_input("食物繊維 g", value=float(nutr["fiber"]),
-                                 min_value=0.0, step=0.1, key=f"w_nfi_{fv}")
+                st.number_input("脂質 g",     min_value=0.0, step=0.1, key=f"w_nf_{fv}")
+                st.number_input("食物繊維 g", min_value=0.0, step=0.1, key=f"w_nfi_{fv}")
         else:
             st.markdown('<p class="sec-head">推定栄養素（kcalに連動）</p>',
                         unsafe_allow_html=True)
@@ -492,10 +498,9 @@ with st.sidebar:
                       key=f"w_activity_{fv}", on_change=_on_activity)
         st.text_input("📝 メモ（任意）", placeholder="公園で実施など",
                        key=f"w_memo_{fv}")
-        kcal_ex = int(st.session_state.get(f"w_kcal_{fv}",
-                      ACTIVITY_KCAL[ACTIVITY_TYPES[0]]))
-        st.number_input("🔥 カロリー (kcal)", value=kcal_ex,
-                         min_value=0, step=5, key=f"w_kcal_{fv}")
+        if f"w_kcal_{fv}" not in st.session_state:
+            st.session_state[f"w_kcal_{fv}"] = ACTIVITY_KCAL[ACTIVITY_TYPES[0]]
+        st.number_input("🔥 カロリー (kcal)", min_value=0, step=5, key=f"w_kcal_{fv}")
 
     st.divider()
 
@@ -951,6 +956,18 @@ with tab_nutr:
             plt.tight_layout()
             st.pyplot(fig_n, use_container_width=True)
             plt.close(fig_n)
+
+        st.divider()
+        with st.expander("📚 栄養データの出典"):
+            st.markdown("""
+**出典：文部科学省『日本食品標準成分表2020年版（八訂）』**
+
+プリセット食品の栄養値は上記成分表に基づいています。
+定食・カレー・ラーメンなど複合料理は概算値です。
+「✏️ その他を入力…」で選択した場合は手入力した値がそのまま記録されます。
+
+- 成分表の詳細: [文部科学省 食品成分データベース](https://fooddb.mext.go.jp/)
+""")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
