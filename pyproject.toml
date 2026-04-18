@@ -5,6 +5,8 @@ description = "Ancient-Rome dark-themed calorie tracker"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "gspread>=6.0",
+    "google-auth>=2.0",
     "matplotlib>=3.8",
     "numpy>=1.26",
     "pandas>=3.0.2",

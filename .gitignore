@@ -22,6 +22,9 @@ dist/
 # PyInstaller
 *.app/
 
+# Secrets (never commit)
+.streamlit/secrets.toml
+
 # IDE
 .vscode/
 .idea/

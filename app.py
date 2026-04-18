@@ -1,8 +1,10 @@
 """Calolie — スマートカロリー管理"""
 import base64
 import io
-import os
 from datetime import date as _date, timedelta
+
+import gspread
+from google.oauth2.service_account import Credentials
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -13,8 +15,6 @@ import streamlit as st
 # ─────────────────────────────────────────────────────────────────────────────
 # 定数
 # ─────────────────────────────────────────────────────────────────────────────
-CSV_FILE    = "food_log.csv"
-WEIGHT_CSV  = "weight_log.csv"
 FIELDNAMES  = ["日付", "種別", "食事", "食べ物", "カロリー(kcal)",
                "タンパク質(g)", "脂質(g)", "炭水化物(g)", "食物繊維(g)"]
 WEIGHT_COLS = ["日付", "体重(kg)", "メモ"]
@@ -88,42 +88,75 @@ GP = dict(bg="#F0FDF4", panel="#FFFFFF", grid="#D1FAE5",
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSV
+# Google Sheets
 # ─────────────────────────────────────────────────────────────────────────────
-def load_df() -> pd.DataFrame:
-    if not os.path.exists(CSV_FILE):
-        return pd.DataFrame(columns=FIELDNAMES)
+_GS_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+FOOD_SHEET_NAME   = "食事記録"
+WEIGHT_SHEET_NAME = "体重記録"
+
+
+@st.cache_resource
+def _gs_client():
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=_GS_SCOPES)
+    return gspread.authorize(creds)
+
+
+def _get_ws(sheet_name: str, cols: list) -> gspread.Worksheet:
+    ss = _gs_client().open_by_key(st.secrets["sheets"]["spreadsheet_id"])
     try:
-        df = pd.read_csv(CSV_FILE, dtype=str).fillna("")
+        ws = ss.worksheet(sheet_name)
+    except gspread.WorksheetNotFound:
+        ws = ss.add_worksheet(title=sheet_name, rows=2000, cols=len(cols))
+        ws.append_row(cols)
+    return ws
+
+
+def load_df() -> pd.DataFrame:
+    try:
+        ws   = _get_ws(FOOD_SHEET_NAME, FIELDNAMES)
+        rows = ws.get_all_values()
+        if len(rows) <= 1:
+            return pd.DataFrame(columns=FIELDNAMES)
+        df = pd.DataFrame(rows[1:], columns=rows[0]).fillna("")
+        for col in FIELDNAMES:
+            if col not in df.columns:
+                df[col] = ""
+        if df["種別"].eq("").all():
+            df["種別"] = "摂取"
+        return df[FIELDNAMES]
     except Exception:
         return pd.DataFrame(columns=FIELDNAMES)
-    for col in FIELDNAMES:
-        if col not in df.columns:
-            df[col] = ""
-    if df["種別"].eq("").all():
-        df["種別"] = "摂取"
-    return df[FIELDNAMES]
 
 
 def save_df(df: pd.DataFrame):
-    df.to_csv(CSV_FILE, index=False, encoding="utf-8")
+    ws = _get_ws(FOOD_SHEET_NAME, FIELDNAMES)
+    ws.clear()
+    ws.update([FIELDNAMES] + df[FIELDNAMES].fillna("").astype(str).values.tolist())
 
 
 def load_weight_df() -> pd.DataFrame:
-    if not os.path.exists(WEIGHT_CSV):
-        return pd.DataFrame(columns=WEIGHT_COLS)
     try:
-        df = pd.read_csv(WEIGHT_CSV, dtype=str).fillna("")
+        ws   = _get_ws(WEIGHT_SHEET_NAME, WEIGHT_COLS)
+        rows = ws.get_all_values()
+        if len(rows) <= 1:
+            return pd.DataFrame(columns=WEIGHT_COLS)
+        df = pd.DataFrame(rows[1:], columns=rows[0]).fillna("")
+        for c in WEIGHT_COLS:
+            if c not in df.columns:
+                df[c] = ""
+        return df[WEIGHT_COLS]
     except Exception:
         return pd.DataFrame(columns=WEIGHT_COLS)
-    for c in WEIGHT_COLS:
-        if c not in df.columns:
-            df[c] = ""
-    return df[WEIGHT_COLS]
 
 
 def save_weight_df(df: pd.DataFrame):
-    df.to_csv(WEIGHT_CSV, index=False, encoding="utf-8")
+    ws = _get_ws(WEIGHT_SHEET_NAME, WEIGHT_COLS)
+    ws.clear()
+    ws.update([WEIGHT_COLS] + df[WEIGHT_COLS].fillna("").astype(str).values.tolist())
 
 
 def _nutr(food: str) -> dict:
