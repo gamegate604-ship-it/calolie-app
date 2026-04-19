@@ -479,16 +479,37 @@ with st.sidebar:
         st.markdown('<p class="sec-head">食べ物を入力</p>', unsafe_allow_html=True)
 
         # ── オートコンプリート食べ物入力 ──────────────────────────────────────
-        if f"w_food_text_{fv}" not in st.session_state:
-            st.session_state[f"w_food_text_{fv}"] = ""
+        # food_sel_{fv}  … 候補から選択した食べ物名（非ウィジェットキー）
+        # w_food_text_{fv} … 検索テキスト入力（ウィジェットキー）
+        # この2つを分離することで Streamlit の「描画後に widget key を変更禁止」制約を回避
 
+        if f"food_sel_{fv}" not in st.session_state:
+            st.session_state[f"food_sel_{fv}"] = ""
+
+        # 候補選択済みの場合は選択表示 + クリアボタン
+        sel = st.session_state[f"food_sel_{fv}"]
+        if sel:
+            st.markdown(
+                f'<div style="background:#D1FAE5;border-radius:10px;'
+                f'padding:8px 12px;font-size:.85rem;font-weight:700;'
+                f'color:#065F46;margin-bottom:6px">✅ {sel}</div>',
+                unsafe_allow_html=True)
+            if st.button("✕ 選択解除", key=f"clear_sel_{fv}"):
+                st.session_state[f"food_sel_{fv}"] = ""
+                st.session_state[f"nutr_{fv}"]     = _nutr("")
+                # w_kcal は描画前なのでここで 0 に設定可
+                st.session_state[f"w_kcal_{fv}"]   = 0
+                st.rerun()
+
+        # 検索テキスト入力
         food_text = st.text_input(
-            "食べ物", placeholder="例: バナナ、鶏むね肉…",
-            key=f"w_food_text_{fv}", label_visibility="collapsed",
+            "食べ物を検索", placeholder="バナナ、鶏むね肉など…",
+            key=f"w_food_text_{fv}",
+            label_visibility="collapsed",
         )
 
-        # 候補を表示（部分一致・最大6件）
-        if food_text:
+        # 候補ボタン（部分一致・最大6件）— ウィジェットの描画前なので w_kcal の設定が安全
+        if food_text and not sel:
             matches = [k for k in FOOD_OPTIONS
                        if food_text.lower() in k.lower()][:6]
             if matches:
@@ -497,14 +518,17 @@ with st.sidebar:
                 for i, m in enumerate(matches):
                     if cols[i % 2].button(m, key=f"sug_{fv}_{i}",
                                           use_container_width=True):
-                        st.session_state[f"w_food_text_{fv}"] = m
-                        st.session_state[f"w_kcal_{fv}"]      = NUTRITION[m]["kcal"]
-                        st.session_state[f"nutr_{fv}"]        = _nutr(m)
+                        # 非ウィジェットキーの設定 → 問題なし
+                        st.session_state[f"food_sel_{fv}"] = m
+                        st.session_state[f"nutr_{fv}"]     = _nutr(m)
+                        # w_kcal はこの時点でまだ未描画 → 設定OK
+                        st.session_state[f"w_kcal_{fv}"]   = NUTRITION[m]["kcal"]
                         st.rerun()
 
-        food_save   = st.session_state.get(f"w_food_text_{fv}", "")
-        is_preset   = food_save in NUTRITION
-        is_custom   = bool(food_save) and not is_preset
+        # 保存する食べ物名の決定
+        food_save = sel if sel else food_text
+        is_preset = food_save in NUTRITION
+        is_custom = bool(food_save) and not is_preset
 
         if f"w_kcal_{fv}" not in st.session_state:
             st.session_state[f"w_kcal_{fv}"] = \
@@ -550,8 +574,10 @@ with st.sidebar:
     st.divider()
 
     if st.button("✨ 保存する", use_container_width=True, type="primary"):
-        kcal_now = st.session_state.get(f"w_kcal_{fv}", 0) or 0
-        food_save = st.session_state.get(f"w_food_text_{fv}", "")
+        kcal_now  = st.session_state.get(f"w_kcal_{fv}", 0) or 0
+        _sel      = st.session_state.get(f"food_sel_{fv}", "")
+        _txt      = st.session_state.get(f"w_food_text_{fv}", "")
+        food_save = _sel if _sel else _txt
         act_sel  = st.session_state.get(f"w_activity_{fv}", ACTIVITY_TYPES[0])
         memo     = st.session_state.get(f"w_memo_{fv}", "")
         date_val = st.session_state.get(f"w_date_{fv}", _date.today())
@@ -598,10 +624,22 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────────────
 # メインエリア
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown('<p class="grad-title">🌿 Calolie</p>', unsafe_allow_html=True)
-st.markdown('<p class="caption">食事・運動・体重・栄養をまとめて管理 — なりたい自分をデザインしよう ✨</p>',
-            unsafe_allow_html=True)
-st.write("")
+st.markdown("""
+<div style="
+  background: linear-gradient(135deg, #059669 0%, #7C3AED 100%);
+  border-radius: 20px;
+  padding: 28px 32px 24px;
+  margin-bottom: 20px;
+  box-shadow: 0 4px 24px rgba(5,150,105,0.18);
+">
+  <div style="font-size:2.2rem;font-weight:900;color:#fff;letter-spacing:.02em;line-height:1.15;">
+    🌿 Calolie
+  </div>
+  <div style="color:rgba(255,255,255,0.82);font-size:.88rem;margin-top:6px;font-weight:500;">
+    食事・運動・体重・栄養をまとめて管理 — なりたい自分をデザインしよう ✨
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 tab_bal, tab_log, tab_weight, tab_nutr, tab_graph = st.tabs(
     ["📊 収支", "📝 記録・編集", "⚖️ 体重", "🧬 栄養素", "📈 グラフ"])
@@ -616,7 +654,16 @@ with tab_bal:
     all_dates = sorted(df["日付"].unique(), reverse=True)
 
     if not all_dates:
-        st.info("まだ記録がありません。サイドバーから追加してください 🌿")
+        st.markdown("""
+<div style="text-align:center;padding:48px 24px;">
+  <div style="font-size:3rem;margin-bottom:12px;">🌱</div>
+  <div style="font-size:1.1rem;font-weight:700;color:#059669;margin-bottom:8px;">
+    まだ記録がありません
+  </div>
+  <div style="color:#6B7280;font-size:.88rem;">
+    左のサイドバーから食事・運動を記録してみましょう！
+  </div>
+</div>""", unsafe_allow_html=True)
     else:
         def_i = all_dates.index(today_str) if today_str in all_dates else 0
         sel   = st.selectbox("📅 日付", all_dates, index=def_i, key="bal_date")
