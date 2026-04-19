@@ -115,15 +115,13 @@ def _get_ws(sheet_name: str, cols: list) -> gspread.Worksheet:
     return ws
 
 
-def _sheet_name(prefix: str, email: str) -> str:
-    # メールアドレスをシート名に使う（100文字制限に収まるよう切り詰め）
-    safe = email.replace("/", "_").replace("\\", "_").replace("*", "_")
-    return f"{prefix}_{safe}"[:100]
+FOOD_SHEET_NAME   = "食事記録"
+WEIGHT_SHEET_NAME = "体重記録"
 
 
-def load_df(email: str) -> pd.DataFrame:
+def load_df() -> pd.DataFrame:
     try:
-        ws   = _get_ws(_sheet_name("食事", email), FIELDNAMES)
+        ws   = _get_ws(FOOD_SHEET_NAME, FIELDNAMES)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return pd.DataFrame(columns=FIELDNAMES)
@@ -138,15 +136,15 @@ def load_df(email: str) -> pd.DataFrame:
         return pd.DataFrame(columns=FIELDNAMES)
 
 
-def save_df(df: pd.DataFrame, email: str):
-    ws = _get_ws(_sheet_name("食事", email), FIELDNAMES)
+def save_df(df: pd.DataFrame):
+    ws = _get_ws(FOOD_SHEET_NAME, FIELDNAMES)
     ws.clear()
     ws.update([FIELDNAMES] + df[FIELDNAMES].fillna("").astype(str).values.tolist())
 
 
-def load_weight_df(email: str) -> pd.DataFrame:
+def load_weight_df() -> pd.DataFrame:
     try:
-        ws   = _get_ws(_sheet_name("体重", email), WEIGHT_COLS)
+        ws   = _get_ws(WEIGHT_SHEET_NAME, WEIGHT_COLS)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return pd.DataFrame(columns=WEIGHT_COLS)
@@ -159,8 +157,8 @@ def load_weight_df(email: str) -> pd.DataFrame:
         return pd.DataFrame(columns=WEIGHT_COLS)
 
 
-def save_weight_df(df: pd.DataFrame, email: str):
-    ws = _get_ws(_sheet_name("体重", email), WEIGHT_COLS)
+def save_weight_df(df: pd.DataFrame):
+    ws = _get_ws(WEIGHT_SHEET_NAME, WEIGHT_COLS)
     ws.clear()
     ws.update([WEIGHT_COLS] + df[WEIGHT_COLS].fillna("").astype(str).values.tolist())
 
@@ -418,40 +416,16 @@ html,body,[class*="css"]{font-family:'Hiragino Sans','Noto Sans JP','Yu Gothic',
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ログイン確認
-# ─────────────────────────────────────────────────────────────────────────────
-if not st.user.is_logged_in:
-    st.markdown('<p class="grad-title">🌿 Calolie</p>', unsafe_allow_html=True)
-    st.markdown('<p class="caption">食事・運動・体重・栄養をまとめて管理 — なりたい自分をデザインしよう ✨</p>',
-                unsafe_allow_html=True)
-    st.write("")
-    st.info("利用するにはGoogleアカウントでログインしてください。")
-    if st.button("🔑 Googleでログイン", type="primary", use_container_width=False):
-        st.login("google")
-    st.stop()
-
-_user_email = st.user.email
-_user_name  = st.user.name or _user_email
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Session State 初期化
 # ─────────────────────────────────────────────────────────────────────────────
-for _k, _v in [("df", None), ("wdf", None), ("fv", 0), ("ss_saved", False),
-               ("last_email", None)]:
+for _k, _v in [("df", None), ("wdf", None), ("fv", 0), ("ss_saved", False)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
-# ユーザーが切り替わったらデータをリセット
-if st.session_state.last_email != _user_email:
-    st.session_state.df         = None
-    st.session_state.wdf        = None
-    st.session_state.last_email = _user_email
-
 if st.session_state.df is None:
-    st.session_state.df = load_df(_user_email)
+    st.session_state.df = load_df()
 if st.session_state.wdf is None:
-    st.session_state.wdf = load_weight_df(_user_email)
+    st.session_state.wdf = load_weight_df()
 
 fv = st.session_state.fv
 if f"nutr_{fv}" not in st.session_state:
@@ -459,19 +433,9 @@ if f"nutr_{fv}" not in st.session_state:
 
 
 # ─── コールバック ─────────────────────────────────────────────────────────────
-def _on_food():
-    food = st.session_state.get(f"w_food_{fv}", "")
-    if food in NUTRITION:
-        st.session_state[f"w_kcal_{fv}"] = NUTRITION[food]["kcal"]
-        st.session_state[f"nutr_{fv}"]   = _nutr(food)
-    else:
-        st.session_state[f"w_kcal_{fv}"] = 0
-        st.session_state[f"nutr_{fv}"]   = _nutr("")
-
-
 def _on_kcal():
     kcal = st.session_state.get(f"w_kcal_{fv}", 0) or 0
-    food = st.session_state.get(f"w_food_{fv}", "")
+    food = st.session_state.get(f"w_food_text_{fv}", "")
     if food in NUTRITION and NUTRITION[food]["kcal"] > 0:
         r    = kcal / NUTRITION[food]["kcal"]
         base = NUTRITION[food]
@@ -496,9 +460,6 @@ with st.sidebar:
     st.markdown('<p class="grad-title">🌿 Calolie</p>', unsafe_allow_html=True)
     st.markdown('<p class="caption">毎日の食事・運動を記録して、なりたい自分へ ✨</p>',
                 unsafe_allow_html=True)
-    st.markdown(f'<p class="caption">👤 {_user_name}</p>', unsafe_allow_html=True)
-    if st.button("ログアウト", use_container_width=False):
-        st.logout()
     st.divider()
 
     if st.session_state.ss_saved:
@@ -515,21 +476,39 @@ with st.sidebar:
 
     if kind_val == "摂取":
         st.selectbox("🕐 タイミング", MEAL_TIMES, key=f"w_meal_{fv}")
-        st.markdown('<p class="sec-head">食べ物を選択</p>', unsafe_allow_html=True)
+        st.markdown('<p class="sec-head">食べ物を入力</p>', unsafe_allow_html=True)
 
-        food_choice = st.selectbox(
-            "食べ物", FOOD_OPTIONS + ["✏️ その他を入力…"],
-            index=_DFLT_IDX, key=f"w_food_{fv}",
-            on_change=_on_food, label_visibility="collapsed",
+        # ── オートコンプリート食べ物入力 ──────────────────────────────────────
+        if f"w_food_text_{fv}" not in st.session_state:
+            st.session_state[f"w_food_text_{fv}"] = ""
+
+        food_text = st.text_input(
+            "食べ物", placeholder="例: バナナ、鶏むね肉…",
+            key=f"w_food_text_{fv}", label_visibility="collapsed",
         )
-        is_custom = food_choice == "✏️ その他を入力…"
-        if is_custom:
-            st.text_input("食べ物名", placeholder="例: タピオカ 🧋",
-                           key=f"w_custom_{fv}")
+
+        # 候補を表示（部分一致・最大6件）
+        if food_text:
+            matches = [k for k in FOOD_OPTIONS
+                       if food_text.lower() in k.lower()][:6]
+            if matches:
+                st.markdown('<p class="sec-head">候補</p>', unsafe_allow_html=True)
+                cols = st.columns(2)
+                for i, m in enumerate(matches):
+                    if cols[i % 2].button(m, key=f"sug_{fv}_{i}",
+                                          use_container_width=True):
+                        st.session_state[f"w_food_text_{fv}"] = m
+                        st.session_state[f"w_kcal_{fv}"]      = NUTRITION[m]["kcal"]
+                        st.session_state[f"nutr_{fv}"]        = _nutr(m)
+                        st.rerun()
+
+        food_save   = st.session_state.get(f"w_food_text_{fv}", "")
+        is_preset   = food_save in NUTRITION
+        is_custom   = bool(food_save) and not is_preset
 
         if f"w_kcal_{fv}" not in st.session_state:
-            st.session_state[f"w_kcal_{fv}"] = int(
-                NUTRITION.get(food_choice, {}).get("kcal", 0))
+            st.session_state[f"w_kcal_{fv}"] = \
+                NUTRITION[food_save]["kcal"] if is_preset else 0
         st.number_input("🔥 カロリー (kcal)",
                          min_value=0, step=5, key=f"w_kcal_{fv}", on_change=_on_kcal)
 
@@ -549,7 +528,7 @@ with st.sidebar:
             with c2:
                 st.number_input("脂質 g",     min_value=0.0, step=0.1, key=f"w_nf_{fv}")
                 st.number_input("食物繊維 g", min_value=0.0, step=0.1, key=f"w_nfi_{fv}")
-        else:
+        elif is_preset:
             st.markdown('<p class="sec-head">推定栄養素（kcalに連動）</p>',
                         unsafe_allow_html=True)
             c1, c2 = st.columns(2)
@@ -572,14 +551,13 @@ with st.sidebar:
 
     if st.button("✨ 保存する", use_container_width=True, type="primary"):
         kcal_now = st.session_state.get(f"w_kcal_{fv}", 0) or 0
-        food_sel = st.session_state.get(f"w_food_{fv}", "")
-        custom   = st.session_state.get(f"w_custom_{fv}", "")
-        food_save = custom if food_sel == "✏️ その他を入力…" else food_sel
+        food_save = st.session_state.get(f"w_food_text_{fv}", "")
         act_sel  = st.session_state.get(f"w_activity_{fv}", ACTIVITY_TYPES[0])
         memo     = st.session_state.get(f"w_memo_{fv}", "")
         date_val = st.session_state.get(f"w_date_{fv}", _date.today())
         meal_val = st.session_state.get(f"w_meal_{fv}", MEAL_TIMES[0])
         nutr_now = st.session_state[f"nutr_{fv}"]
+        is_c     = food_save not in NUTRITION
 
         err = None
         if kind_val == "摂取" and not food_save:
@@ -590,7 +568,6 @@ with st.sidebar:
         if err:
             st.error(err)
         else:
-            is_c = (food_sel == "✏️ その他を入力…")
             if kind_val == "摂取":
                 row = {
                     "日付": str(date_val), "種別": "摂取",
@@ -610,11 +587,11 @@ with st.sidebar:
                     "炭水化物(g)": "0", "食物繊維(g)": "0",
                 }
             updated = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-            save_df(updated, _user_email)
+            save_df(updated)
             st.session_state.df = updated
             df = updated
             st.session_state.ss_saved = True
-            st.session_state.fv += 1   # ← ウィジェットキーに直接代入しない
+            st.session_state.fv += 1
             st.rerun()
 
 
@@ -728,7 +705,7 @@ with tab_log:
                         if i < len(ed_in):
                             for col in ec_in:
                                 df.loc[oi, col] = str(ed_in.iloc[i][col])
-                    save_df(df, _user_email); st.session_state.df = df
+                    save_df(df); st.session_state.df = df
                     st.success("摂取記録を更新しました ✨"); st.rerun()
 
         # 消費
@@ -758,7 +735,7 @@ with tab_log:
                         if i < len(ed_ex2):
                             for col in ec_ex:
                                 df.loc[oi, col] = str(ed_ex2.iloc[i][col])
-                    save_df(df, _user_email); st.session_state.df = df
+                    save_df(df); st.session_state.df = df
                     st.success("運動記録を更新しました ✨"); st.rerun()
 
         # 削除
@@ -774,7 +751,7 @@ with tab_log:
                                    format_func=lambda i: opts[i], key="del_sel")
                 if st.button("削除する", type="secondary"):
                     updated = df.drop(index=del_rows.iloc[di]["index"]).reset_index(drop=True)
-                    save_df(updated, _user_email); st.session_state.df = updated
+                    save_df(updated); st.session_state.df = updated
                     st.success("削除しました。"); st.rerun()
 
 
@@ -805,7 +782,7 @@ with tab_weight:
                     "日付": str(w_date), "体重(kg)": str(w_kg), "メモ": w_memo
                 }])
                 updated_w = pd.concat([wdf, new_w], ignore_index=True)
-                save_weight_df(updated_w, _user_email)
+                save_weight_df(updated_w)
                 st.session_state.wdf = updated_w
                 wdf = updated_w
                 st.success(f"✅ {w_date} の体重 {w_kg:.1f} kg を記録しました！")
@@ -849,7 +826,7 @@ with tab_weight:
                 })
             if st.form_submit_button("💾 体重記録を保存", type="primary",
                                       use_container_width=True):
-                save_weight_df(ed_w, _user_email)
+                save_weight_df(ed_w)
                 st.session_state.wdf = ed_w
                 st.success("体重記録を更新しました ✨"); st.rerun()
 
@@ -862,7 +839,7 @@ with tab_weight:
                                      format_func=lambda i: del_opts_w[i], key="del_w")
                 if st.button("削除", type="secondary", key="del_w_btn"):
                     upd_w = wdf.drop(index=wdf_idx.iloc[di_w]["index"]).reset_index(drop=True)
-                    save_weight_df(upd_w, _user_email); st.session_state.wdf = upd_w
+                    save_weight_df(upd_w); st.session_state.wdf = upd_w
                     st.success("削除しました。"); st.rerun()
 
 
