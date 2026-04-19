@@ -433,9 +433,32 @@ if f"nutr_{fv}" not in st.session_state:
 
 
 # ─── コールバック ─────────────────────────────────────────────────────────────
+def _on_food_search():
+    """検索テキスト変更時: 候補リストを更新し選択をリセット（非ウィジェットkeyのみ変更→安全）"""
+    text = st.session_state.get(f"w_food_text_{fv}", "")
+    matches = [k for k in FOOD_OPTIONS if text.lower() in k.lower()] if text else []
+    st.session_state[f"food_matches_{fv}"] = matches
+    st.session_state[f"food_sel_{fv}"]     = ""
+    st.session_state[f"nutr_{fv}"]         = _nutr("")
+    # コールバック内なので w_kcal の変更は安全
+    st.session_state[f"w_kcal_{fv}"]       = 0
+
+
+def _on_food_select():
+    """候補セレクトボックス変更時: コールバック内なので他ウィジェットkeyの変更が安全"""
+    chosen = st.session_state.get(f"w_food_preset_{fv}", "")
+    if chosen in NUTRITION:
+        st.session_state[f"food_sel_{fv}"] = chosen
+        st.session_state[f"w_kcal_{fv}"]   = NUTRITION[chosen]["kcal"]
+        st.session_state[f"nutr_{fv}"]     = _nutr(chosen)
+    else:
+        st.session_state[f"food_sel_{fv}"] = ""
+
+
 def _on_kcal():
     kcal = st.session_state.get(f"w_kcal_{fv}", 0) or 0
-    food = st.session_state.get(f"w_food_text_{fv}", "")
+    food = (st.session_state.get(f"food_sel_{fv}", "")
+            or st.session_state.get(f"w_food_text_{fv}", ""))
     if food in NUTRITION and NUTRITION[food]["kcal"] > 0:
         r    = kcal / NUTRITION[food]["kcal"]
         base = NUTRITION[food]
@@ -478,61 +501,48 @@ with st.sidebar:
         st.selectbox("🕐 タイミング", MEAL_TIMES, key=f"w_meal_{fv}")
         st.markdown('<p class="sec-head">食べ物を入力</p>', unsafe_allow_html=True)
 
-        # ── オートコンプリート食べ物入力 ──────────────────────────────────────
-        # food_sel_{fv}  … 候補から選択した食べ物名（非ウィジェットキー）
-        # w_food_text_{fv} … 検索テキスト入力（ウィジェットキー）
-        # この2つを分離することで Streamlit の「描画後に widget key を変更禁止」制約を回避
+        # ── オートコンプリート（テキスト検索 + 候補セレクトボックス）─────────
+        # 非ウィジェットキーの初期化
+        for _k, _v in [(f"food_sel_{fv}", ""), (f"food_matches_{fv}", [])]:
+            if _k not in st.session_state:
+                st.session_state[_k] = _v
+        # ウィジェットキーの初期化（描画前に一度だけ）
+        if f"w_kcal_{fv}" not in st.session_state:
+            st.session_state[f"w_kcal_{fv}"] = 0
 
-        if f"food_sel_{fv}" not in st.session_state:
-            st.session_state[f"food_sel_{fv}"] = ""
-
-        # 候補選択済みの場合は選択表示 + クリアボタン
-        sel = st.session_state[f"food_sel_{fv}"]
-        if sel:
-            st.markdown(
-                f'<div style="background:#D1FAE5;border-radius:10px;'
-                f'padding:8px 12px;font-size:.85rem;font-weight:700;'
-                f'color:#065F46;margin-bottom:6px">✅ {sel}</div>',
-                unsafe_allow_html=True)
-            if st.button("✕ 選択解除", key=f"clear_sel_{fv}"):
-                st.session_state[f"food_sel_{fv}"] = ""
-                st.session_state[f"nutr_{fv}"]     = _nutr("")
-                # w_kcal は描画前なのでここで 0 に設定可
-                st.session_state[f"w_kcal_{fv}"]   = 0
-                st.rerun()
-
-        # 検索テキスト入力
-        food_text = st.text_input(
+        # ① 検索テキスト入力（on_change コールバック内でのみ state 変更）
+        st.text_input(
             "食べ物を検索", placeholder="バナナ、鶏むね肉など…",
-            key=f"w_food_text_{fv}",
-            label_visibility="collapsed",
+            key=f"w_food_text_{fv}", label_visibility="collapsed",
+            on_change=_on_food_search,
         )
 
-        # 候補ボタン（部分一致・最大6件）— ウィジェットの描画前なので w_kcal の設定が安全
-        if food_text and not sel:
-            matches = [k for k in FOOD_OPTIONS
-                       if food_text.lower() in k.lower()][:6]
-            if matches:
-                st.markdown('<p class="sec-head">候補</p>', unsafe_allow_html=True)
-                cols = st.columns(2)
-                for i, m in enumerate(matches):
-                    if cols[i % 2].button(m, key=f"sug_{fv}_{i}",
-                                          use_container_width=True):
-                        # 非ウィジェットキーの設定 → 問題なし
-                        st.session_state[f"food_sel_{fv}"] = m
-                        st.session_state[f"nutr_{fv}"]     = _nutr(m)
-                        # w_kcal はこの時点でまだ未描画 → 設定OK
-                        st.session_state[f"w_kcal_{fv}"]   = NUTRITION[m]["kcal"]
-                        st.rerun()
+        # ② 候補セレクトボックス（マッチがあるときだけ表示）
+        matches = st.session_state.get(f"food_matches_{fv}", [])
+        if matches:
+            st.markdown('<p class="sec-head">候補から選ぶ</p>', unsafe_allow_html=True)
+            options = ["── 選択してください ──"] + matches
+            if f"w_food_preset_{fv}" not in st.session_state:
+                st.session_state[f"w_food_preset_{fv}"] = options[0]
+            st.selectbox(
+                "候補", options=options,
+                key=f"w_food_preset_{fv}", label_visibility="collapsed",
+                on_change=_on_food_select,
+            )
 
-        # 保存する食べ物名の決定
+        # 選択済み食べ物の表示
+        sel       = st.session_state.get(f"food_sel_{fv}", "")
+        food_text = st.session_state.get(f"w_food_text_{fv}", "")
+        if sel:
+            st.markdown(
+                f'<div style="background:#D1FAE5;border-radius:8px;padding:6px 12px;'
+                f'font-size:.84rem;font-weight:700;color:#065F46;margin:4px 0">✅ {sel}</div>',
+                unsafe_allow_html=True)
+
         food_save = sel if sel else food_text
         is_preset = food_save in NUTRITION
         is_custom = bool(food_save) and not is_preset
 
-        if f"w_kcal_{fv}" not in st.session_state:
-            st.session_state[f"w_kcal_{fv}"] = \
-                NUTRITION[food_save]["kcal"] if is_preset else 0
         st.number_input("🔥 カロリー (kcal)",
                          min_value=0, step=5, key=f"w_kcal_{fv}", on_change=_on_kcal)
 
