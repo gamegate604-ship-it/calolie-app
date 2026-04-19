@@ -115,9 +115,15 @@ def _get_ws(sheet_name: str, cols: list) -> gspread.Worksheet:
     return ws
 
 
-def load_df() -> pd.DataFrame:
+def _sheet_name(prefix: str, email: str) -> str:
+    # メールアドレスをシート名に使う（100文字制限に収まるよう切り詰め）
+    safe = email.replace("/", "_").replace("\\", "_").replace("*", "_")
+    return f"{prefix}_{safe}"[:100]
+
+
+def load_df(email: str) -> pd.DataFrame:
     try:
-        ws   = _get_ws(FOOD_SHEET_NAME, FIELDNAMES)
+        ws   = _get_ws(_sheet_name("食事", email), FIELDNAMES)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return pd.DataFrame(columns=FIELDNAMES)
@@ -132,15 +138,15 @@ def load_df() -> pd.DataFrame:
         return pd.DataFrame(columns=FIELDNAMES)
 
 
-def save_df(df: pd.DataFrame):
-    ws = _get_ws(FOOD_SHEET_NAME, FIELDNAMES)
+def save_df(df: pd.DataFrame, email: str):
+    ws = _get_ws(_sheet_name("食事", email), FIELDNAMES)
     ws.clear()
     ws.update([FIELDNAMES] + df[FIELDNAMES].fillna("").astype(str).values.tolist())
 
 
-def load_weight_df() -> pd.DataFrame:
+def load_weight_df(email: str) -> pd.DataFrame:
     try:
-        ws   = _get_ws(WEIGHT_SHEET_NAME, WEIGHT_COLS)
+        ws   = _get_ws(_sheet_name("体重", email), WEIGHT_COLS)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return pd.DataFrame(columns=WEIGHT_COLS)
@@ -153,8 +159,8 @@ def load_weight_df() -> pd.DataFrame:
         return pd.DataFrame(columns=WEIGHT_COLS)
 
 
-def save_weight_df(df: pd.DataFrame):
-    ws = _get_ws(WEIGHT_SHEET_NAME, WEIGHT_COLS)
+def save_weight_df(df: pd.DataFrame, email: str):
+    ws = _get_ws(_sheet_name("体重", email), WEIGHT_COLS)
     ws.clear()
     ws.update([WEIGHT_COLS] + df[WEIGHT_COLS].fillna("").astype(str).values.tolist())
 
@@ -412,16 +418,40 @@ html,body,[class*="css"]{font-family:'Hiragino Sans','Noto Sans JP','Yu Gothic',
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ログイン確認
+# ─────────────────────────────────────────────────────────────────────────────
+if not st.user.is_logged_in:
+    st.markdown('<p class="grad-title">🌿 Calolie</p>', unsafe_allow_html=True)
+    st.markdown('<p class="caption">食事・運動・体重・栄養をまとめて管理 — なりたい自分をデザインしよう ✨</p>',
+                unsafe_allow_html=True)
+    st.write("")
+    st.info("利用するにはGoogleアカウントでログインしてください。")
+    if st.button("🔑 Googleでログイン", type="primary", use_container_width=False):
+        st.login("google")
+    st.stop()
+
+_user_email = st.user.email
+_user_name  = st.user.name or _user_email
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Session State 初期化
 # ─────────────────────────────────────────────────────────────────────────────
-for _k, _v in [("df", None), ("wdf", None), ("fv", 0), ("ss_saved", False)]:
+for _k, _v in [("df", None), ("wdf", None), ("fv", 0), ("ss_saved", False),
+               ("last_email", None)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
+# ユーザーが切り替わったらデータをリセット
+if st.session_state.last_email != _user_email:
+    st.session_state.df         = None
+    st.session_state.wdf        = None
+    st.session_state.last_email = _user_email
+
 if st.session_state.df is None:
-    st.session_state.df = load_df()
+    st.session_state.df = load_df(_user_email)
 if st.session_state.wdf is None:
-    st.session_state.wdf = load_weight_df()
+    st.session_state.wdf = load_weight_df(_user_email)
 
 fv = st.session_state.fv
 if f"nutr_{fv}" not in st.session_state:
@@ -466,6 +496,9 @@ with st.sidebar:
     st.markdown('<p class="grad-title">🌿 Calolie</p>', unsafe_allow_html=True)
     st.markdown('<p class="caption">毎日の食事・運動を記録して、なりたい自分へ ✨</p>',
                 unsafe_allow_html=True)
+    st.markdown(f'<p class="caption">👤 {_user_name}</p>', unsafe_allow_html=True)
+    if st.button("ログアウト", use_container_width=False):
+        st.logout()
     st.divider()
 
     if st.session_state.ss_saved:
@@ -577,7 +610,7 @@ with st.sidebar:
                     "炭水化物(g)": "0", "食物繊維(g)": "0",
                 }
             updated = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-            save_df(updated)
+            save_df(updated, _user_email)
             st.session_state.df = updated
             df = updated
             st.session_state.ss_saved = True
@@ -695,7 +728,7 @@ with tab_log:
                         if i < len(ed_in):
                             for col in ec_in:
                                 df.loc[oi, col] = str(ed_in.iloc[i][col])
-                    save_df(df); st.session_state.df = df
+                    save_df(df, _user_email); st.session_state.df = df
                     st.success("摂取記録を更新しました ✨"); st.rerun()
 
         # 消費
@@ -725,7 +758,7 @@ with tab_log:
                         if i < len(ed_ex2):
                             for col in ec_ex:
                                 df.loc[oi, col] = str(ed_ex2.iloc[i][col])
-                    save_df(df); st.session_state.df = df
+                    save_df(df, _user_email); st.session_state.df = df
                     st.success("運動記録を更新しました ✨"); st.rerun()
 
         # 削除
@@ -741,7 +774,7 @@ with tab_log:
                                    format_func=lambda i: opts[i], key="del_sel")
                 if st.button("削除する", type="secondary"):
                     updated = df.drop(index=del_rows.iloc[di]["index"]).reset_index(drop=True)
-                    save_df(updated); st.session_state.df = updated
+                    save_df(updated, _user_email); st.session_state.df = updated
                     st.success("削除しました。"); st.rerun()
 
 
@@ -772,7 +805,7 @@ with tab_weight:
                     "日付": str(w_date), "体重(kg)": str(w_kg), "メモ": w_memo
                 }])
                 updated_w = pd.concat([wdf, new_w], ignore_index=True)
-                save_weight_df(updated_w)
+                save_weight_df(updated_w, _user_email)
                 st.session_state.wdf = updated_w
                 wdf = updated_w
                 st.success(f"✅ {w_date} の体重 {w_kg:.1f} kg を記録しました！")
@@ -816,7 +849,7 @@ with tab_weight:
                 })
             if st.form_submit_button("💾 体重記録を保存", type="primary",
                                       use_container_width=True):
-                save_weight_df(ed_w)
+                save_weight_df(ed_w, _user_email)
                 st.session_state.wdf = ed_w
                 st.success("体重記録を更新しました ✨"); st.rerun()
 
@@ -829,7 +862,7 @@ with tab_weight:
                                      format_func=lambda i: del_opts_w[i], key="del_w")
                 if st.button("削除", type="secondary", key="del_w_btn"):
                     upd_w = wdf.drop(index=wdf_idx.iloc[di_w]["index"]).reset_index(drop=True)
-                    save_weight_df(upd_w); st.session_state.wdf = upd_w
+                    save_weight_df(upd_w, _user_email); st.session_state.wdf = upd_w
                     st.success("削除しました。"); st.rerun()
 
 
