@@ -486,8 +486,7 @@ with st.sidebar:
     st.divider()
 
     if st.session_state.ss_saved:
-        st.markdown('<div class="saved-banner">✅ 保存しました！</div>',
-                    unsafe_allow_html=True)
+        st.toast("✅ 保存しました！", icon="🌿")
         st.session_state.ss_saved = False
 
     kind_raw = st.radio("種別", ["🍽️ 食事（摂取）", "🏃 運動（消費）"],
@@ -818,7 +817,7 @@ with tab_log:
 with tab_weight:
     # ── 入力フォーム ──────────────────────────────────────────────────────────
     with st.expander("➕ 体重を記録する", expanded=wdf.empty):
-        with st.form("weight_form"):
+        with st.form("weight_form", clear_on_submit=True):
             wc1, wc2 = st.columns([1, 2])
             with wc1:
                 w_date = st.date_input("📅 日付", value=_date.today(), key="wf_date")
@@ -842,7 +841,7 @@ with tab_weight:
                 save_weight_df(updated_w)
                 st.session_state.wdf = updated_w
                 wdf = updated_w
-                st.success(f"✅ {w_date} の体重 {w_kg:.1f} kg を記録しました！")
+                st.toast(f"✅ {w_kg:.1f} kg を記録しました！", icon="⚖️")
                 st.rerun()
 
     # ── グラフ ────────────────────────────────────────────────────────────────
