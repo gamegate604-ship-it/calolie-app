@@ -18,15 +18,20 @@ import streamlit as st
 FIELDNAMES  = ["日付", "種別", "食事", "食べ物", "カロリー(kcal)",
                "タンパク質(g)", "脂質(g)", "炭水化物(g)", "食物繊維(g)"]
 WEIGHT_COLS = ["日付", "体重(kg)", "メモ"]
-BMR_KCAL    = 1630
+_bmr    = 1630
 
 MEAL_TIMES     = ["朝", "昼", "夜", "間食"]
-ACTIVITY_TYPES = ["ランニング20分", "フットサル1時間", "エルゴ2000m", "自重筋トレ20分", "ヨガ20分"]
+ACTIVITY_TYPES = ["ランニング20分", "フットサル1時間", "エルゴ2000m",
+                  "エルゴ3000mレート17", "自重筋トレ20分", "ヨガ20分"]
 ACTIVITY_KCAL  = {"ランニング20分": 200, "フットサル1時間": 600,
-                  "エルゴ2000m": 120, "自重筋トレ20分": 100, "ヨガ20分": 60}
+                  "エルゴ2000m": 120,
+                  "エルゴ3000mレート17": 193,  # Concept2計算式: 183.6W×12.4分、スプリット2:04/500m実測
+                  "自重筋トレ20分": 100, "ヨガ20分": 60}
 
 NUTRITION: dict[str, dict[str, float]] = {
     "ご飯(1杯160g)":          {"kcal": 269, "protein":  4.1, "fat":  0.5, "carbs": 59.4, "fiber": 0.5},
+    "ご飯1合(炊いた330g)":   {"kcal": 554, "protein":  8.3, "fat":  1.0, "carbs":122.4, "fiber": 1.0},
+    "ご飯2合(炊いた660g)":   {"kcal":1109, "protein": 16.5, "fat":  2.0, "carbs":244.9, "fiber": 2.0},
     "おにぎり(1個100g)":      {"kcal": 179, "protein":  3.0, "fat":  0.5, "carbs": 39.8, "fiber": 0.4},
     "食パン(1枚60g)":         {"kcal": 158, "protein":  5.3, "fat":  2.5, "carbs": 28.6, "fiber": 1.3},
     "グラノーラ(50g)":        {"kcal": 224, "protein":  4.7, "fat":  7.2, "carbs": 34.4, "fiber": 3.1},
@@ -117,6 +122,12 @@ def _get_ws(sheet_name: str, cols: list) -> gspread.Worksheet:
 
 FOOD_SHEET_NAME   = "食事記録"
 WEIGHT_SHEET_NAME = "体重記録"
+SETTINGS_SHEET    = "設定"
+FAVORITES_SHEET   = "お気に入り"
+CONDITION_SHEET   = "コンディション記録"
+CONDITION_COLS    = ["日付", "コンディション", "メモ"]
+COND_EMOJI  = {1: "😩", 2: "😕", 3: "😐", 4: "😊", 5: "😄"}
+COND_LABEL  = {1: "最悪", 2: "イマイチ", 3: "普通", 4: "良い", 5: "最高"}
 
 
 def load_df() -> pd.DataFrame:
@@ -161,6 +172,61 @@ def save_weight_df(df: pd.DataFrame):
     ws = _get_ws(WEIGHT_SHEET_NAME, WEIGHT_COLS)
     ws.clear()
     ws.update([WEIGHT_COLS] + df[WEIGHT_COLS].fillna("").astype(str).values.tolist())
+
+
+def load_settings() -> dict:
+    try:
+        ws   = _get_ws(SETTINGS_SHEET, ["項目", "値"])
+        rows = ws.get_all_values()
+        if len(rows) <= 1:
+            return {}
+        return {r[0]: r[1] for r in rows[1:] if len(r) >= 2}
+    except Exception:
+        return {}
+
+
+def save_settings(d: dict):
+    ws = _get_ws(SETTINGS_SHEET, ["項目", "値"])
+    ws.clear()
+    ws.update([["項目", "値"]] + [[k, v] for k, v in d.items()])
+
+
+def load_favorites() -> list:
+    try:
+        ws   = _get_ws(FAVORITES_SHEET, ["食べ物"])
+        rows = ws.get_all_values()
+        if len(rows) <= 1:
+            return []
+        return [r[0] for r in rows[1:] if r and r[0]]
+    except Exception:
+        return []
+
+
+def save_favorites(favs: list):
+    ws = _get_ws(FAVORITES_SHEET, ["食べ物"])
+    ws.clear()
+    ws.update([["食べ物"]] + [[f] for f in favs])
+
+
+def load_cond_df() -> pd.DataFrame:
+    try:
+        ws   = _get_ws(CONDITION_SHEET, CONDITION_COLS)
+        rows = ws.get_all_values()
+        if len(rows) <= 1:
+            return pd.DataFrame(columns=CONDITION_COLS)
+        df = pd.DataFrame(rows[1:], columns=rows[0]).fillna("")
+        for c in CONDITION_COLS:
+            if c not in df.columns:
+                df[c] = ""
+        return df[CONDITION_COLS]
+    except Exception:
+        return pd.DataFrame(columns=CONDITION_COLS)
+
+
+def save_cond_df(df: pd.DataFrame):
+    ws = _get_ws(CONDITION_SHEET, CONDITION_COLS)
+    ws.clear()
+    ws.update([CONDITION_COLS] + df[CONDITION_COLS].fillna("").astype(str).values.tolist())
 
 
 def _nutr(food: str) -> dict:
@@ -229,7 +295,7 @@ def _icon_b64() -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # グラフ：カロリー収支
 # ─────────────────────────────────────────────────────────────────────────────
-def build_calorie_figure(df: pd.DataFrame):
+def build_calorie_figure(df: pd.DataFrame, bmr_kcal: int = _bmr):
     p = GP
     ir = df[df["種別"] == "摂取"].copy()
     er = df[df["種別"] == "消費"].copy()
@@ -244,35 +310,43 @@ def build_calorie_figure(df: pd.DataFrame):
 
     iv = [ib.get(d, 0) for d in dates]
     ev = [eb.get(d, 0) for d in dates]
-    cv = [BMR_KCAL + e for e in ev]
+    cv = [bmr_kcal + e for e in ev]
     bv = [i - c for i, c in zip(iv, cv)]
 
     x, w = np.arange(len(dates)), 0.38
     fig, ax = plt.subplots(figsize=(max(7, len(dates) * 1.4), 5), facecolor=p["bg"])
     ax.set_facecolor(p["panel"])
-    bi = ax.bar(x - w / 2, iv, width=w, color=p["intake"],  label="摂取",          zorder=3, alpha=0.85)
-    bc = ax.bar(x + w / 2, cv, width=w, color=p["consume"], label="消費(BMR+運動)", zorder=3, alpha=0.85)
+
+    # 棒グラフ（ラベルなし — 凡例をテキストのみにするため label 非設定）
+    ax.bar(x - w / 2, iv, width=w, color=p["intake"],  zorder=3, alpha=0.82)
+    ax.bar(x + w / 2, cv, width=w, color=p["consume"], zorder=3, alpha=0.82)
+
+    # 棒の上に収支 (+/-) だけ表示
     for i, (a, b, c) in enumerate(zip(iv, cv, bv)):
         top   = max(a, b)
         color = p["pos"] if c >= 0 else p["neg"]
-        ax.text(x[i], top + 20, f"{'+'if c>=0 else''}{c:.0f}",
-                ha="center", va="bottom", fontsize=9, color=color, fontweight="bold", zorder=4)
-    for bar in [*bi, *bc]:
-        h = bar.get_height()
-        if h > 60:
-            ax.text(bar.get_x() + bar.get_width() / 2, h / 2, f"{h:.0f}",
-                    ha="center", va="center", fontsize=8, color="#FFF", fontweight="bold", zorder=5)
-    ax.axhline(BMR_KCAL, color=p["dim"], lw=1.2, ls="--", zorder=2,
-               label=f"基礎代謝 {BMR_KCAL} kcal")
+        ax.text(x[i], top + 15, f"{'+'if c>=0 else''}{c:.0f}",
+                ha="center", va="bottom", fontsize=8, color=color, fontweight="bold", zorder=4)
+
+    # 目標ライン
+    ax.axhline(bmr_kcal, color=p["dim"], lw=1.2, ls="--", zorder=2)
+
+    # 凡例を四角パッチなし・テキストのみで右上に表示
+    ax.text(0.99, 0.97, f"■ 摂取", transform=ax.transAxes,
+            ha="right", va="top", fontsize=8, color=p["intake"], fontweight="bold")
+    ax.text(0.99, 0.91, f"■ 消費", transform=ax.transAxes,
+            ha="right", va="top", fontsize=8, color=p["consume"], fontweight="bold")
+    ax.text(0.99, 0.85, f"-- 目標 {bmr_kcal} kcal", transform=ax.transAxes,
+            ha="right", va="top", fontsize=8, color=p["dim"])
+
     ax.set_xticks(x)
     ax.set_xticklabels(dates, rotation=30, ha="right", color=p["text"], fontsize=9)
     ax.yaxis.set_tick_params(labelcolor=p["text"])
     ax.tick_params(colors=p["dim"])
     ax.set_ylabel("kcal", color=p["dim"], fontsize=10)
     ax.spines[:].set_color(p["border"])
-    ax.grid(axis="y", color=p["grid"], lw=0.8, zorder=1)
+    ax.grid(axis="y", color=p["grid"], lw=0.6, zorder=1)
     ax.set_title("カロリー収支", color=p["head"], fontsize=14, pad=14, fontweight="bold")
-    ax.legend(facecolor=p["panel"], edgecolor=p["border"], labelcolor=p["text"], fontsize=9)
     plt.tight_layout()
     return fig
 
@@ -321,8 +395,10 @@ def build_weight_figure(wdf: pd.DataFrame):
     ax.grid(axis="y", color=p["grid"], lw=0.8, zorder=1)
     ax.set_title("体重推移", color=p["head"], fontsize=14, pad=14, fontweight="bold")
     if len(weights) >= 3:
-        ax.legend(facecolor=p["panel"], edgecolor=p["border"],
-                  labelcolor=p["text"], fontsize=9)
+        ax.text(0.99, 0.97, "── 体重",    transform=ax.transAxes,
+                ha="right", va="top", fontsize=8, color=p["weight"], fontweight="bold")
+        ax.text(0.99, 0.91, "-- 3日平均", transform=ax.transAxes,
+                ha="right", va="top", fontsize=8, color="#7C3AED")
     plt.tight_layout()
     return fig
 
@@ -418,7 +494,8 @@ html,body,[class*="css"]{font-family:'Hiragino Sans','Noto Sans JP','Yu Gothic',
 # ─────────────────────────────────────────────────────────────────────────────
 # Session State 初期化
 # ─────────────────────────────────────────────────────────────────────────────
-for _k, _v in [("df", None), ("wdf", None), ("fv", 0), ("ss_saved", False)]:
+for _k, _v in [("df", None), ("wdf", None), ("cdf", None), ("fv", 0), ("ss_saved", False),
+               ("settings", None), ("favorites", None)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -426,7 +503,14 @@ if st.session_state.df is None:
     st.session_state.df = load_df()
 if st.session_state.wdf is None:
     st.session_state.wdf = load_weight_df()
+if st.session_state.settings is None:
+    st.session_state.settings = load_settings()
+if st.session_state.favorites is None:
+    st.session_state.favorites = load_favorites()
+if st.session_state.cdf is None:
+    st.session_state.cdf = load_cond_df()
 
+_bmr = int(st.session_state.settings.get("目標カロリー", str(_bmr)))
 fv = st.session_state.fv
 if f"nutr_{fv}" not in st.session_state:
     st.session_state[f"nutr_{fv}"] = _nutr(_DFLT_FOOD)
@@ -434,23 +518,38 @@ if f"nutr_{fv}" not in st.session_state:
 
 # ─── コールバック ─────────────────────────────────────────────────────────────
 def _on_food_search():
-    """検索テキスト変更時: 候補リストを更新し選択をリセット（非ウィジェットkeyのみ変更→安全）"""
+    """検索テキスト変更時: プリセット＋過去の記録から候補を更新"""
     text = st.session_state.get(f"w_food_text_{fv}", "")
-    matches = [k for k in FOOD_OPTIONS if text.lower() in k.lower()] if text else []
-    st.session_state[f"food_matches_{fv}"] = matches
+    if not text:
+        st.session_state[f"food_matches_{fv}"] = []
+        st.session_state[f"food_sel_{fv}"]     = ""
+        st.session_state[f"nutr_{fv}"]         = _nutr("")
+        st.session_state[f"w_kcal_{fv}"]       = 0
+        return
+    q = text.lower()
+    # プリセット候補
+    preset_hits = [k for k in FOOD_OPTIONS if q in k.lower()]
+    # 過去の記録候補（📝 プレフィックスで区別）
+    past_hits   = [f"📝 {k}" for k in _past_foods if q in k.lower()]
+    st.session_state[f"food_matches_{fv}"] = preset_hits + past_hits
     st.session_state[f"food_sel_{fv}"]     = ""
     st.session_state[f"nutr_{fv}"]         = _nutr("")
-    # コールバック内なので w_kcal の変更は安全
     st.session_state[f"w_kcal_{fv}"]       = 0
 
 
 def _on_food_select():
-    """候補セレクトボックス変更時: コールバック内なので他ウィジェットkeyの変更が安全"""
+    """候補セレクトボックス変更時: プリセット or 過去の記録からkcalを補完"""
     chosen = st.session_state.get(f"w_food_preset_{fv}", "")
-    if chosen in NUTRITION:
-        st.session_state[f"food_sel_{fv}"] = chosen
-        st.session_state[f"w_kcal_{fv}"]   = NUTRITION[chosen]["kcal"]
-        st.session_state[f"nutr_{fv}"]     = _nutr(chosen)
+    # 過去の記録（📝 プレフィックスを除去して実際の食品名を取得）
+    actual = chosen.removeprefix("📝 ") if chosen.startswith("📝 ") else chosen
+    if actual in NUTRITION:
+        st.session_state[f"food_sel_{fv}"] = actual
+        st.session_state[f"w_kcal_{fv}"]   = NUTRITION[actual]["kcal"]
+        st.session_state[f"nutr_{fv}"]     = _nutr(actual)
+    elif actual in _past_foods:
+        st.session_state[f"food_sel_{fv}"] = actual
+        st.session_state[f"w_kcal_{fv}"]   = _past_foods[actual]
+        st.session_state[f"nutr_{fv}"]     = _nutr("")  # 栄養素データなし
     else:
         st.session_state[f"food_sel_{fv}"] = ""
 
@@ -472,8 +571,30 @@ def _on_activity():
     st.session_state[f"w_kcal_{fv}"] = ACTIVITY_KCAL.get(act, 0)
 
 
+def _on_fav_select():
+    chosen = st.session_state.get(f"w_fav_{fv}", "")
+    if chosen and chosen in NUTRITION:
+        st.session_state[f"food_sel_{fv}"] = chosen
+        st.session_state[f"w_kcal_{fv}"]   = NUTRITION[chosen]["kcal"]
+        st.session_state[f"nutr_{fv}"]     = _nutr(chosen)
+
+
 df  = st.session_state.df
 wdf = st.session_state.wdf
+cdf = st.session_state.cdf
+
+# ── 過去の記録から食品名→平均kcalを構築（プリセットにないものだけ） ─────────
+_past_foods: dict[str, int] = {}
+if df is not None and not df.empty:
+    _pi = df[df["種別"] == "摂取"].copy()
+    _pi["カロリー(kcal)"] = pd.to_numeric(_pi["カロリー(kcal)"], errors="coerce")
+    _pi = _pi[(_pi["食べ物"].str.strip() != "") & (_pi["カロリー(kcal)"] > 0)]
+    if not _pi.empty:
+        _past_foods = {
+            k: int(v)
+            for k, v in _pi.groupby("食べ物")["カロリー(kcal)"].mean().round().items()
+            if k not in NUTRITION
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -493,11 +614,32 @@ with st.sidebar:
                          horizontal=True, key=f"w_kind_{fv}")
     kind_val = "摂取" if "摂取" in kind_raw else "消費"
 
-    # 日付（format パラメータなし → カレンダー表示される）
-    st.date_input("📅 日付", value=_date.today(), key=f"w_date_{fv}")
+    # 日付（今日ワンタップ、別の日だけカレンダー表示）
+    _today = _date.today()
+    _use_today = st.checkbox(
+        f"📅 今日の記録（{_today.strftime('%m/%d')}）",
+        value=True, key=f"w_use_today_{fv}"
+    )
+    if not _use_today:
+        st.date_input("別の日付", value=_today, key=f"w_date_{fv}",
+                      label_visibility="collapsed")
 
     if kind_val == "摂取":
         st.selectbox("🕐 タイミング", MEAL_TIMES, key=f"w_meal_{fv}")
+
+        # ── お気に入り ────────────────────────────────────────────────────────
+        _favs = st.session_state.favorites
+        if _favs:
+            st.markdown('<p class="sec-head">⭐ お気に入り</p>', unsafe_allow_html=True)
+            _fav_opts = ["── 選択してください ──"] + _favs
+            if f"w_fav_{fv}" not in st.session_state:
+                st.session_state[f"w_fav_{fv}"] = _fav_opts[0]
+            st.selectbox(
+                "お気に入り", _fav_opts,
+                key=f"w_fav_{fv}", label_visibility="collapsed",
+                on_change=_on_fav_select,
+            )
+
         st.markdown('<p class="sec-head">食べ物を入力</p>', unsafe_allow_html=True)
 
         # ── オートコンプリート（テキスト検索 + 候補セレクトボックス）─────────
@@ -533,14 +675,35 @@ with st.sidebar:
         sel       = st.session_state.get(f"food_sel_{fv}", "")
         food_text = st.session_state.get(f"w_food_text_{fv}", "")
         if sel:
+            _is_past = sel not in NUTRITION and sel in _past_foods
+            _badge   = "📝 履歴" if _is_past else "✅ プリセット"
+            _color   = "#EDE9FE" if _is_past else "#D1FAE5"
+            _tcolor  = "#5B21B6" if _is_past else "#065F46"
             st.markdown(
-                f'<div style="background:#D1FAE5;border-radius:8px;padding:6px 12px;'
-                f'font-size:.84rem;font-weight:700;color:#065F46;margin:4px 0">✅ {sel}</div>',
+                f'<div style="background:{_color};border-radius:8px;padding:6px 12px;'
+                f'font-size:.84rem;font-weight:700;color:{_tcolor};margin:4px 0">'
+                f'{_badge} {sel}</div>',
                 unsafe_allow_html=True)
 
         food_save = sel if sel else food_text
         is_preset = food_save in NUTRITION
         is_custom = bool(food_save) and not is_preset
+
+        # ── お気に入り追加/削除ボタン ─────────────────────────────────────────
+        if food_save:
+            _in_favs = food_save in st.session_state.favorites
+            if _in_favs:
+                if st.button("★ お気に入りから削除", key=f"unfav_{fv}",
+                              use_container_width=True):
+                    st.session_state.favorites.remove(food_save)
+                    save_favorites(st.session_state.favorites)
+                    st.rerun()
+            else:
+                if st.button("☆ お気に入りに追加", key=f"fav_{fv}",
+                              use_container_width=True):
+                    st.session_state.favorites.append(food_save)
+                    save_favorites(st.session_state.favorites)
+                    st.rerun()
 
         st.number_input("🔥 カロリー (kcal)",
                          min_value=0, step=5, key=f"w_kcal_{fv}", on_change=_on_kcal)
@@ -582,6 +745,21 @@ with st.sidebar:
 
     st.divider()
 
+    # ── 目標カロリー設定 ──────────────────────────────────────────────────────
+    with st.expander("⚙️ 目標カロリーを設定"):
+        _cur = int(st.session_state.settings.get("目標カロリー", str(_bmr)))
+        _new = st.number_input(
+            "基礎代謝 / 目標摂取カロリー (kcal)",
+            min_value=1000, max_value=5000, step=10, value=_cur,
+            help="消費カロリー = この値 + 運動消費。デフォルト 1630 kcal",
+        )
+        if st.button("設定を保存", key="save_settings_btn"):
+            st.session_state.settings["目標カロリー"] = str(_new)
+            save_settings(st.session_state.settings)
+            st.session_state.settings = load_settings()  # 再読み込みで確定
+            st.toast(f"✅ 目標カロリーを {_new} kcal に設定しました", icon="⚙️")
+            st.rerun()
+
     if st.button("✨ 保存する", use_container_width=True, type="primary"):
         kcal_now  = st.session_state.get(f"w_kcal_{fv}", 0) or 0
         _sel      = st.session_state.get(f"food_sel_{fv}", "")
@@ -589,7 +767,10 @@ with st.sidebar:
         food_save = _sel if _sel else _txt
         act_sel  = st.session_state.get(f"w_activity_{fv}", ACTIVITY_TYPES[0])
         memo     = st.session_state.get(f"w_memo_{fv}", "")
-        date_val = st.session_state.get(f"w_date_{fv}", _date.today())
+        if st.session_state.get(f"w_use_today_{fv}", True):
+            date_val = _date.today()
+        else:
+            date_val = st.session_state.get(f"w_date_{fv}", _date.today())
         meal_val = st.session_state.get(f"w_meal_{fv}", MEAL_TIMES[0])
         nutr_now = st.session_state[f"nutr_{fv}"]
         is_c     = food_save not in NUTRITION
@@ -682,15 +863,35 @@ with tab_bal:
 
         intake_k   = day[day["種別"] == "摂取"]["カロリー(kcal)"].sum()
         exercise_k = day[day["種別"] == "消費"]["カロリー(kcal)"].sum()
-        consume_k  = BMR_KCAL + exercise_k
+        consume_k  = _bmr + exercise_k
         balance    = intake_k - consume_k
         sign       = "+" if balance >= 0 else ""
 
         m1, m2, m3 = st.columns(3)
         m1.metric("🍽️ 摂取カロリー", f"{intake_k:,.0f} kcal")
         m2.metric("🔥 消費カロリー",  f"{consume_k:,.0f} kcal",
-                  f"基礎代謝 {BMR_KCAL:,} + 運動 {exercise_k:,.0f}")
+                  f"目標 {_bmr:,} + 運動 {exercise_k:,.0f}")
         m3.metric("⚖️ 今日の収支",   f"{sign}{balance:,.0f} kcal")
+
+        # ── 食事別カロリー小計 ─────────────────────────────────────────────
+        st.write("")
+        st.markdown('<p class="sec-head">🕐 食事別カロリー内訳</p>', unsafe_allow_html=True)
+        _intake_day  = day[day["種別"] == "摂取"]
+        _meal_totals = _intake_day.groupby("食事")["カロリー(kcal)"].sum()
+        _mcols       = st.columns(len(MEAL_TIMES))
+        for _i, _meal in enumerate(MEAL_TIMES):
+            _mk = _meal_totals.get(_meal, 0)
+            with _mcols[_i]:
+                st.markdown(
+                    f'<div style="background:#FFF;border-radius:12px;padding:10px 8px;'
+                    f'text-align:center;border:1px solid #D1FAE5;box-shadow:0 1px 4px rgba(5,150,105,.08)">'
+                    f'<div style="font-size:.72rem;font-weight:700;color:#6B7280;letter-spacing:.06em">{_meal}</div>'
+                    f'<div style="font-size:1.1rem;font-weight:800;color:{"#059669" if _mk>0 else "#9CA3AF"};margin-top:2px">'
+                    f'{_mk:,.0f}</div>'
+                    f'<div style="font-size:.65rem;color:#9CA3AF">kcal</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
         st.write("")
 
@@ -716,6 +917,62 @@ with tab_bal:
         else:
             st.warning(f"⚠️ **{abs(balance):,.0f} kcal** マイナスは多すぎるかも。"
                        f"食事量を少し増やして体を労ってあげましょう。")
+
+        # ── コンディション入力 ────────────────────────────────────────────────
+        st.divider()
+        st.markdown('<p class="sec-head">💭 今日のコンディション</p>', unsafe_allow_html=True)
+
+        _cdf        = st.session_state.cdf
+        _cond_row   = _cdf[_cdf["日付"] == sel]
+        _cur_score  = int(_cond_row["コンディション"].values[0]) if not _cond_row.empty else 0
+
+        # 5つのワンタップボタン
+        _btn_cols = st.columns(5)
+        for _s in range(1, 6):
+            _selected = (_s == _cur_score)
+            _label    = f"{COND_EMOJI[_s]}\n{COND_LABEL[_s]}"
+            if _btn_cols[_s - 1].button(
+                _label, key=f"cond_{_s}_{sel}",
+                use_container_width=True,
+                type="primary" if _selected else "secondary",
+            ):
+                _new_row  = pd.DataFrame([{"日付": sel, "コンディション": str(_s), "メモ": ""}])
+                _updated  = pd.concat([_cdf[_cdf["日付"] != sel], _new_row], ignore_index=True)
+                save_cond_df(_updated)
+                st.session_state.cdf = _updated
+                st.rerun()
+
+        if _cur_score:
+            st.caption(f"記録済: {COND_EMOJI[_cur_score]} {COND_LABEL[_cur_score]}")
+
+        # ── 過去7日間の傾向 ───────────────────────────────────────────────────
+        with st.expander("📈 過去7日間の傾向（コンディション × カロリー収支）"):
+            _cutoff7 = (pd.Timestamp(today_str) - pd.Timedelta(days=6)).strftime("%Y-%m-%d")
+            _cdf7    = _cdf[_cdf["日付"] >= _cutoff7].copy()
+            _cdf7["コンディション"] = pd.to_numeric(_cdf7["コンディション"], errors="coerce")
+
+            _dates7  = [(pd.Timestamp(today_str) - pd.Timedelta(days=i)).strftime("%Y-%m-%d")
+                        for i in range(6, -1, -1)]
+
+            _rows7 = []
+            for _d in _dates7:
+                _c  = _cdf7[_cdf7["日付"] == _d]["コンディション"].values
+                _dk = df[df["日付"] == _d].copy()
+                _dk["カロリー(kcal)"] = pd.to_numeric(_dk["カロリー(kcal)"], errors="coerce").fillna(0)
+                _ik = _dk[_dk["種別"] == "摂取"]["カロリー(kcal)"].sum()
+                _ek = _dk[_dk["種別"] == "消費"]["カロリー(kcal)"].sum()
+                _bk = _ik - (_bmr + _ek)
+                _rows7.append({
+                    "日付":      _d[5:],  # MM-DD
+                    "コンディション": (f"{COND_EMOJI[int(_c[0])]} {COND_LABEL[int(_c[0])]}"
+                                   if len(_c) > 0 and not pd.isna(_c[0]) else "—"),
+                    "収支(kcal)": f"{'+' if _bk >= 0 else ''}{_bk:,.0f}" if _ik > 0 else "—",
+                })
+
+            st.dataframe(
+                pd.DataFrame(_rows7),
+                use_container_width=True, hide_index=True,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -816,7 +1073,8 @@ with tab_log:
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_weight:
     # ── 入力フォーム ──────────────────────────────────────────────────────────
-    with st.expander("➕ 体重を記録する", expanded=wdf.empty):
+    _w_saved = st.session_state.pop("weight_saved", False)
+    with st.expander("➕ 体重を記録する", expanded=(wdf.empty and not _w_saved)):
         with st.form("weight_form", clear_on_submit=True):
             wc1, wc2 = st.columns([1, 2])
             with wc1:
@@ -842,6 +1100,7 @@ with tab_weight:
                 st.session_state.wdf = updated_w
                 wdf = updated_w
                 st.toast(f"✅ {w_kg:.1f} kg を記録しました！", icon="⚖️")
+                st.session_state.weight_saved = True
                 st.rerun()
 
     # ── グラフ ────────────────────────────────────────────────────────────────
@@ -1073,7 +1332,7 @@ with tab_nutr:
 # Tab 5: グラフ（カロリー収支）
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_graph:
-    fig = build_calorie_figure(df)
+    fig = build_calorie_figure(df, bmr_kcal=_bmr)
     if fig is None:
         st.info("記録がありません。サイドバーからデータを追加してください 🌿")
     else:
