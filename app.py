@@ -53,7 +53,9 @@ NUTRITION: dict[str, dict[str, float]] = {
     "豚の生姜焼き":           {"kcal": 380, "protein": 22.0, "fat": 22.0, "carbs": 15.0, "fiber": 0.5},
     "牛ステーキ(150g)":       {"kcal": 393, "protein": 30.5, "fat": 30.0, "carbs":  0.5, "fiber": 0.0},
     "唐揚げ(3個100g)":        {"kcal": 307, "protein": 18.7, "fat": 21.0, "carbs": 11.5, "fiber": 0.3},
+    "唐揚げ定食":             {"kcal": 750, "protein": 27.0, "fat": 22.0, "carbs": 95.0, "fiber": 2.5},
     "卵(Mサイズ1個)":         {"kcal":  76, "protein":  6.2, "fat":  5.2, "carbs":  0.2, "fiber": 0.0},
+    "卵2個":                  {"kcal": 152, "protein": 12.4, "fat": 10.4, "carbs":  0.4, "fiber": 0.0},
     "豆腐(絹150g)":           {"kcal":  80, "protein":  7.4, "fat":  4.2, "carbs":  2.1, "fiber": 0.2},
     "サラダ(150g)":           {"kcal":  75, "protein":  2.5, "fat":  4.2, "carbs":  7.5, "fiber": 2.8},
     "味噌汁(1杯)":            {"kcal":  42, "protein":  3.0, "fat":  1.5, "carbs":  4.8, "fiber": 1.2},
@@ -494,7 +496,7 @@ html,body,[class*="css"]{font-family:'Hiragino Sans','Noto Sans JP','Yu Gothic',
 # ─────────────────────────────────────────────────────────────────────────────
 # Session State 初期化
 # ─────────────────────────────────────────────────────────────────────────────
-for _k, _v in [("df", None), ("wdf", None), ("cdf", None), ("fv", 0), ("ss_saved", False),
+for _k, _v in [("df", None), ("wdf", None), ("cdf", None), ("fv", 0), ("wfv", 0), ("ss_saved", False),
                ("settings", None), ("favorites", None)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -511,7 +513,8 @@ if st.session_state.cdf is None:
     st.session_state.cdf = load_cond_df()
 
 _bmr = int(st.session_state.settings.get("目標カロリー", str(_bmr)))
-fv = st.session_state.fv
+fv  = st.session_state.fv
+wfv = st.session_state.wfv
 if f"nutr_{fv}" not in st.session_state:
     st.session_state[f"nutr_{fv}"] = _nutr(_DFLT_FOOD)
 
@@ -1075,22 +1078,26 @@ with tab_weight:
     # ── 入力フォーム ──────────────────────────────────────────────────────────
     _w_saved = st.session_state.pop("weight_saved", False)
     with st.expander("➕ 体重を記録する", expanded=(wdf.empty and not _w_saved)):
-        with st.form("weight_form", clear_on_submit=True):
+        with st.form(f"weight_form_{wfv}"):
             wc1, wc2 = st.columns([1, 2])
             with wc1:
-                w_date = st.date_input("📅 日付", value=_date.today(), key="wf_date")
+                w_date = st.date_input("📅 日付", value=_date.today(), key=f"wf_date_{wfv}")
             with wc2:
-                # 直近の体重を初期値に
-                last_w = 55.0
-                if not wdf.empty:
-                    tmp = wdf.copy()
-                    tmp["体重(kg)"] = pd.to_numeric(tmp["体重(kg)"], errors="coerce")
-                    tmp = tmp.dropna(subset=["体重(kg)"])
-                    if not tmp.empty:
-                        last_w = float(tmp.sort_values("日付").iloc[-1]["体重(kg)"])
+                # 直近の体重を初期値に（フォームリセット後は55.0に戻す）
+                _wkg_key = f"wf_kg_{wfv}"
+                if _wkg_key not in st.session_state:
+                    last_w = 55.0
+                    if not wdf.empty:
+                        tmp = wdf.copy()
+                        tmp["体重(kg)"] = pd.to_numeric(tmp["体重(kg)"], errors="coerce")
+                        tmp = tmp.dropna(subset=["体重(kg)"])
+                        if not tmp.empty:
+                            last_w = float(tmp.sort_values("日付").iloc[-1]["体重(kg)"])
+                    st.session_state[_wkg_key] = last_w
                 w_kg = st.number_input("⚖️ 体重 (kg)", min_value=20.0, max_value=250.0,
-                                        value=last_w, step=0.1, format="%.1f")
-            w_memo = st.text_input("📝 メモ（任意）", placeholder="例: 朝起床後・食前")
+                                        step=0.1, format="%.1f", key=_wkg_key)
+            w_memo = st.text_input("📝 メモ（任意）", placeholder="例: 朝起床後・食前",
+                                   key=f"wf_memo_{wfv}")
             if st.form_submit_button("記録する", type="primary", use_container_width=True):
                 new_w = pd.DataFrame([{
                     "日付": str(w_date), "体重(kg)": str(w_kg), "メモ": w_memo
@@ -1101,6 +1108,7 @@ with tab_weight:
                 wdf = updated_w
                 st.toast(f"✅ {w_kg:.1f} kg を記録しました！", icon="⚖️")
                 st.session_state.weight_saved = True
+                st.session_state.wfv += 1
                 st.rerun()
 
     # ── グラフ ────────────────────────────────────────────────────────────────
