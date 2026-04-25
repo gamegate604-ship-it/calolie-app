@@ -131,6 +131,36 @@ CONDITION_COLS    = ["日付", "コンディション", "メモ"]
 COND_EMOJI  = {1: "😩", 2: "😕", 3: "😐", 4: "😊", 5: "😄"}
 COND_LABEL  = {1: "最悪", 2: "イマイチ", 3: "普通", 4: "良い", 5: "最高"}
 
+ERGO_SHEET_NAME = "エルゴ記録"
+ERGO_DISTANCES  = [2000, 3000, 4000]
+ERGO_SPLITS     = [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+ERGO_COLS       = (["日付", "距離(m)", "トータルタイム", "メモ"] +
+                   [c for d in ERGO_SPLITS for c in (f"{d}m_タイム", f"{d}m_レート")])
+_ERGO_DIST_COLOR = {"2000": "#7C3AED", "3000": "#059669", "4000": "#F59E0B"}
+
+
+def _time_to_sec(s: str) -> "int | None":
+    """'M:SS' or 'MM:SS' → seconds。パース失敗時は None"""
+    s = s.strip()
+    if not s:
+        return None
+    parts = s.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]) * 60 + int(parts[1])
+    except ValueError:
+        return None
+
+
+def _sec_to_mmss(sec) -> str:
+    """seconds → 'M:SS'"""
+    try:
+        sec = int(sec)
+        return f"{sec // 60}:{sec % 60:02d}"
+    except Exception:
+        return ""
+
 
 def load_df() -> pd.DataFrame:
     try:
@@ -229,6 +259,27 @@ def save_cond_df(df: pd.DataFrame):
     ws = _get_ws(CONDITION_SHEET, CONDITION_COLS)
     ws.clear()
     ws.update([CONDITION_COLS] + df[CONDITION_COLS].fillna("").astype(str).values.tolist())
+
+
+def load_ergo_df() -> pd.DataFrame:
+    try:
+        ws   = _get_ws(ERGO_SHEET_NAME, ERGO_COLS)
+        rows = ws.get_all_values()
+        if len(rows) <= 1:
+            return pd.DataFrame(columns=ERGO_COLS)
+        df = pd.DataFrame(rows[1:], columns=rows[0]).fillna("")
+        for c in ERGO_COLS:
+            if c not in df.columns:
+                df[c] = ""
+        return df[ERGO_COLS]
+    except Exception:
+        return pd.DataFrame(columns=ERGO_COLS)
+
+
+def save_ergo_df(df: pd.DataFrame):
+    ws = _get_ws(ERGO_SHEET_NAME, ERGO_COLS)
+    ws.clear()
+    ws.update([ERGO_COLS] + df[ERGO_COLS].fillna("").astype(str).values.tolist())
 
 
 def _nutr(food: str) -> dict:
@@ -406,10 +457,138 @@ def build_weight_figure(wdf: pd.DataFrame):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# グラフ：エルゴ タイム推移
+# ─────────────────────────────────────────────────────────────────────────────
+def build_ergo_trend_figure(edf: pd.DataFrame, dist: int):
+    p   = GP
+    edf = edf.copy()
+    edf["_sec"] = edf["トータルタイム"].apply(_time_to_sec)
+    edf = edf.dropna(subset=["_sec"]).sort_values("日付").reset_index(drop=True)
+    if edf.empty:
+        return None
+
+    dates = edf["日付"].tolist()
+    secs  = edf["_sec"].tolist()
+    x     = np.arange(len(dates))
+    color = _ERGO_DIST_COLOR.get(str(dist), p["head"])
+
+    fig, ax = plt.subplots(figsize=(max(6, len(dates) * 1.2), 4), facecolor=p["bg"])
+    ax.set_facecolor(p["panel"])
+
+    ax.plot(x, secs, color=color, lw=2.5, marker="o", markersize=9,
+            markerfacecolor=color, markeredgecolor="white", markeredgewidth=2, zorder=3)
+    ax.fill_between(x, secs, min(secs) - 5, color=color, alpha=0.12, zorder=2)
+
+    for xi, s in zip(x, secs):
+        ax.text(xi, s + 1, _sec_to_mmss(s), ha="center", va="bottom",
+                fontsize=9, color=color, fontweight="bold")
+
+    # Y軸を MM:SS 表記
+    _mn, _mx = min(secs), max(secs)
+    _range = max(_mx - _mn, 10)
+    _step  = max(1, _range // 5)
+    yticks = list(range(max(0, _mn - _step), _mx + _step * 2, _step))
+    ax.set_yticks(yticks)
+    ax.set_yticklabels([_sec_to_mmss(s) for s in yticks], color=p["text"], fontsize=9)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(dates, rotation=30, ha="right", color=p["text"], fontsize=9)
+    ax.set_ylabel("タイム", color=p["dim"], fontsize=10)
+    ax.spines[:].set_color(p["border"])
+    ax.grid(axis="y", color=p["grid"], lw=0.6, zorder=1)
+    ax.set_title(f"エルゴ {dist}m タイム推移（↓ 速い）",
+                 color=p["head"], fontsize=13, pad=12, fontweight="bold")
+    plt.tight_layout()
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# グラフ：エルゴ スプリット詳細
+# ─────────────────────────────────────────────────────────────────────────────
+def build_ergo_split_figure(row: pd.Series, dist: int):
+    p             = GP
+    active_splits = list(range(500, dist + 1, 500))
+    labels        = [f"{d}m" for d in active_splits]
+    color         = _ERGO_DIST_COLOR.get(str(dist), p["head"])
+    rate_color    = "#F59E0B"
+
+    times_sec, rates = [], []
+    for d in active_splits:
+        t = _time_to_sec(str(row.get(f"{d}m_タイム", "")))
+        r_raw = str(row.get(f"{d}m_レート", "")).strip()
+        times_sec.append(t)
+        rates.append(int(r_raw) if r_raw.isdigit() and int(r_raw) > 0 else 0)
+
+    has_times = any(t is not None and t > 0 for t in times_sec)
+    has_rates = any(r > 0 for r in rates)
+
+    if not has_times and not has_rates:
+        return None
+
+    times_plot = [t if (t is not None and t > 0) else 0 for t in times_sec]
+    x = np.arange(len(labels))
+
+    nrows = 2 if (has_times and has_rates) else 1
+    fig, axes = plt.subplots(nrows, 1,
+                             figsize=(max(6, len(labels) * 1.3), 4 * nrows),
+                             facecolor=p["bg"])
+    if nrows == 1:
+        axes = [axes]
+
+    # ── スプリットタイム棒グラフ ──
+    if has_times:
+        ax1 = axes[0]
+        ax1.set_facecolor(p["panel"])
+        bars = ax1.bar(x, times_plot, color=color, alpha=0.82, zorder=3)
+        for bar, t in zip(bars, times_sec):
+            if t and t > 0:
+                ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                         _sec_to_mmss(t), ha="center", va="bottom",
+                         fontsize=9, color=color, fontweight="bold")
+        valid = [t for t in times_sec if t and t > 0]
+        if valid:
+            _mn, _mx = min(valid), max(valid)
+            _r = max(_mx - _mn, 5)
+            _s = max(1, _r // 4)
+            yticks = list(range(max(0, _mn - _s), _mx + _s * 2, _s))
+            ax1.set_yticks(yticks)
+            ax1.set_yticklabels([_sec_to_mmss(s) for s in yticks],
+                                color=p["text"], fontsize=9)
+        ax1.set_xticks(x); ax1.set_xticklabels(labels, color=p["text"])
+        ax1.set_ylabel("タイム (M:SS)", color=p["dim"])
+        ax1.spines[:].set_color(p["border"])
+        ax1.grid(axis="y", color=p["grid"], lw=0.6, zorder=1)
+        ax1.set_title(f"{dist}m スプリット詳細（{row['日付']}）",
+                      color=p["head"], fontsize=13, pad=12, fontweight="bold")
+
+    # ── レート棒グラフ ──
+    if has_rates:
+        ax2 = axes[-1]
+        ax2.set_facecolor(p["panel"])
+        rbars = ax2.bar(x, rates, color=rate_color, alpha=0.82, zorder=3)
+        for bar, r in zip(rbars, rates):
+            if r > 0:
+                ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.2,
+                         str(r), ha="center", va="bottom",
+                         fontsize=9, color=rate_color, fontweight="bold")
+        ax2.set_xticks(x); ax2.set_xticklabels(labels, color=p["text"])
+        ax2.set_ylabel("レート (SPM)", color=p["dim"])
+        ax2.yaxis.set_tick_params(labelcolor=p["text"])
+        ax2.spines[:].set_color(p["border"])
+        ax2.grid(axis="y", color=p["grid"], lw=0.6, zorder=1)
+        if not has_times:
+            ax2.set_title(f"{dist}m レート詳細（{row['日付']}）",
+                          color=p["head"], fontsize=13, pad=12, fontweight="bold")
+
+    plt.tight_layout()
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ページ設定
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Calolie", page_icon="🌿",
-                   layout="wide", initial_sidebar_state="expanded")
+                   layout="wide", initial_sidebar_state="collapsed")
 
 # PWA アイコン・マニフェスト注入
 _ib64 = _icon_b64()
@@ -496,8 +675,9 @@ html,body,[class*="css"]{font-family:'Hiragino Sans','Noto Sans JP','Yu Gothic',
 # ─────────────────────────────────────────────────────────────────────────────
 # Session State 初期化
 # ─────────────────────────────────────────────────────────────────────────────
-for _k, _v in [("df", None), ("wdf", None), ("cdf", None), ("fv", 0), ("wfv", 0), ("ss_saved", False),
-               ("settings", None), ("favorites", None)]:
+for _k, _v in [("df", None), ("wdf", None), ("cdf", None), ("ergo_df", None),
+               ("fv", 0), ("wfv", 0), ("ergofv", 0), ("ss_saved", False),
+               ("settings", None), ("favorites", None), ("dialog_init", False)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -511,10 +691,13 @@ if st.session_state.favorites is None:
     st.session_state.favorites = load_favorites()
 if st.session_state.cdf is None:
     st.session_state.cdf = load_cond_df()
+if st.session_state.ergo_df is None:
+    st.session_state.ergo_df = load_ergo_df()
 
 _bmr = int(st.session_state.settings.get("目標カロリー", str(_bmr)))
-fv  = st.session_state.fv
-wfv = st.session_state.wfv
+fv     = st.session_state.fv
+wfv    = st.session_state.wfv
+ergofv = st.session_state.ergofv
 if f"nutr_{fv}" not in st.session_state:
     st.session_state[f"nutr_{fv}"] = _nutr(_DFLT_FOOD)
 
@@ -601,82 +784,70 @@ if df is not None and not df.empty:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# サイドバー（食事・運動入力）
+# 入力ダイアログ
 # ─────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown('<p class="grad-title">🌿 Calolie</p>', unsafe_allow_html=True)
-    st.markdown('<p class="caption">毎日の食事・運動を記録して、なりたい自分へ ✨</p>',
-                unsafe_allow_html=True)
-    st.divider()
-
-    if st.session_state.ss_saved:
-        st.toast("✅ 保存しました！", icon="🌿")
-        st.session_state.ss_saved = False
+@st.dialog("📝 食事・運動を記録する", width="large")
+def _input_dialog():
+    _fv = st.session_state.fv
 
     kind_raw = st.radio("種別", ["🍽️ 食事（摂取）", "🏃 運動（消費）"],
-                         horizontal=True, key=f"w_kind_{fv}")
+                         horizontal=True, key=f"w_kind_{_fv}")
     kind_val = "摂取" if "摂取" in kind_raw else "消費"
 
-    # 日付（今日ワンタップ、別の日だけカレンダー表示）
+    # 日付
     _today = _date.today()
-    _use_today = st.checkbox(
-        f"📅 今日の記録（{_today.strftime('%m/%d')}）",
-        value=True, key=f"w_use_today_{fv}"
-    )
+    _dc1, _dc2 = st.columns([1, 1])
+    with _dc1:
+        _use_today = st.checkbox(
+            f"📅 今日（{_today.strftime('%m/%d')}）",
+            value=True, key=f"w_use_today_{_fv}"
+        )
     if not _use_today:
-        st.date_input("別の日付", value=_today, key=f"w_date_{fv}",
-                      label_visibility="collapsed")
+        with _dc2:
+            st.date_input("別の日付", value=_today, key=f"w_date_{_fv}",
+                          label_visibility="collapsed")
 
     if kind_val == "摂取":
-        st.selectbox("🕐 タイミング", MEAL_TIMES, key=f"w_meal_{fv}")
+        st.selectbox("🕐 タイミング", MEAL_TIMES, key=f"w_meal_{_fv}")
 
-        # ── お気に入り ────────────────────────────────────────────────────────
+        # お気に入り
         _favs = st.session_state.favorites
         if _favs:
-            st.markdown('<p class="sec-head">⭐ お気に入り</p>', unsafe_allow_html=True)
-            _fav_opts = ["── 選択してください ──"] + _favs
-            if f"w_fav_{fv}" not in st.session_state:
-                st.session_state[f"w_fav_{fv}"] = _fav_opts[0]
+            _fav_opts = ["⭐ お気に入りから選ぶ"] + _favs
+            if f"w_fav_{_fv}" not in st.session_state:
+                st.session_state[f"w_fav_{_fv}"] = _fav_opts[0]
             st.selectbox(
                 "お気に入り", _fav_opts,
-                key=f"w_fav_{fv}", label_visibility="collapsed",
+                key=f"w_fav_{_fv}", label_visibility="collapsed",
                 on_change=_on_fav_select,
             )
 
-        st.markdown('<p class="sec-head">食べ物を入力</p>', unsafe_allow_html=True)
-
-        # ── オートコンプリート（テキスト検索 + 候補セレクトボックス）─────────
-        # 非ウィジェットキーの初期化
-        for _k, _v in [(f"food_sel_{fv}", ""), (f"food_matches_{fv}", [])]:
+        st.markdown("**食べ物を検索**")
+        for _k, _v in [(f"food_sel_{_fv}", ""), (f"food_matches_{_fv}", [])]:
             if _k not in st.session_state:
                 st.session_state[_k] = _v
-        # ウィジェットキーの初期化（描画前に一度だけ）
-        if f"w_kcal_{fv}" not in st.session_state:
-            st.session_state[f"w_kcal_{fv}"] = 0
+        if f"w_kcal_{_fv}" not in st.session_state:
+            st.session_state[f"w_kcal_{_fv}"] = 0
 
-        # ① 検索テキスト入力（on_change コールバック内でのみ state 変更）
         st.text_input(
             "食べ物を検索", placeholder="バナナ、鶏むね肉など…",
-            key=f"w_food_text_{fv}", label_visibility="collapsed",
+            key=f"w_food_text_{_fv}", label_visibility="collapsed",
             on_change=_on_food_search,
         )
 
-        # ② 候補セレクトボックス（マッチがあるときだけ表示）
-        matches = st.session_state.get(f"food_matches_{fv}", [])
+        matches = st.session_state.get(f"food_matches_{_fv}", [])
         if matches:
-            st.markdown('<p class="sec-head">候補から選ぶ</p>', unsafe_allow_html=True)
             options = ["── 選択してください ──"] + matches
-            if f"w_food_preset_{fv}" not in st.session_state:
-                st.session_state[f"w_food_preset_{fv}"] = options[0]
+            if f"w_food_preset_{_fv}" not in st.session_state:
+                st.session_state[f"w_food_preset_{_fv}"] = options[0]
             st.selectbox(
                 "候補", options=options,
-                key=f"w_food_preset_{fv}", label_visibility="collapsed",
+                key=f"w_food_preset_{_fv}", label_visibility="collapsed",
                 on_change=_on_food_select,
             )
 
-        # 選択済み食べ物の表示
-        sel       = st.session_state.get(f"food_sel_{fv}", "")
-        food_text = st.session_state.get(f"w_food_text_{fv}", "")
+        sel       = st.session_state.get(f"food_sel_{_fv}", "")
+        food_text = st.session_state.get(f"w_food_text_{_fv}", "")
         if sel:
             _is_past = sel not in NUTRITION and sel in _past_foods
             _badge   = "📝 履歴" if _is_past else "✅ プリセット"
@@ -692,90 +863,70 @@ with st.sidebar:
         is_preset = food_save in NUTRITION
         is_custom = bool(food_save) and not is_preset
 
-        # ── お気に入り追加/削除ボタン ─────────────────────────────────────────
         if food_save:
             _in_favs = food_save in st.session_state.favorites
+            _fc1, _fc2 = st.columns([1, 3])
             if _in_favs:
-                if st.button("★ お気に入りから削除", key=f"unfav_{fv}",
-                              use_container_width=True):
+                if _fc1.button("★ 削除", key=f"unfav_{_fv}"):
                     st.session_state.favorites.remove(food_save)
                     save_favorites(st.session_state.favorites)
                     st.rerun()
             else:
-                if st.button("☆ お気に入りに追加", key=f"fav_{fv}",
-                              use_container_width=True):
+                if _fc1.button("☆ お気に入り", key=f"fav_{_fv}"):
                     st.session_state.favorites.append(food_save)
                     save_favorites(st.session_state.favorites)
                     st.rerun()
 
         st.number_input("🔥 カロリー (kcal)",
-                         min_value=0, step=5, key=f"w_kcal_{fv}", on_change=_on_kcal)
+                         min_value=0, step=5, key=f"w_kcal_{_fv}", on_change=_on_kcal)
 
-        nutr = st.session_state[f"nutr_{fv}"]
+        nutr = st.session_state[f"nutr_{_fv}"]
         if is_custom:
-            for _k, _v in [(f"w_np_{fv}",  float(nutr["protein"])),
-                           (f"w_nf_{fv}",  float(nutr["fat"])),
-                           (f"w_nc_{fv}",  float(nutr["carbs"])),
-                           (f"w_nfi_{fv}", float(nutr["fiber"]))]:
+            for _k, _v in [(f"w_np_{_fv}",  float(nutr["protein"])),
+                           (f"w_nf_{_fv}",  float(nutr["fat"])),
+                           (f"w_nc_{_fv}",  float(nutr["carbs"])),
+                           (f"w_nfi_{_fv}", float(nutr["fiber"]))]:
                 if _k not in st.session_state:
                     st.session_state[_k] = _v
-            st.markdown('<p class="sec-head">栄養素（手動入力）</p>', unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            with c1:
-                st.number_input("タンパク質 g", min_value=0.0, step=0.1, key=f"w_np_{fv}")
-                st.number_input("炭水化物 g",   min_value=0.0, step=0.1, key=f"w_nc_{fv}")
-            with c2:
-                st.number_input("脂質 g",     min_value=0.0, step=0.1, key=f"w_nf_{fv}")
-                st.number_input("食物繊維 g", min_value=0.0, step=0.1, key=f"w_nfi_{fv}")
+            st.markdown("**栄養素（手動入力）**")
+            _n1, _n2 = st.columns(2)
+            with _n1:
+                st.number_input("タンパク質 g", min_value=0.0, step=0.1, key=f"w_np_{_fv}")
+                st.number_input("炭水化物 g",   min_value=0.0, step=0.1, key=f"w_nc_{_fv}")
+            with _n2:
+                st.number_input("脂質 g",     min_value=0.0, step=0.1, key=f"w_nf_{_fv}")
+                st.number_input("食物繊維 g", min_value=0.0, step=0.1, key=f"w_nfi_{_fv}")
         elif is_preset:
-            st.markdown('<p class="sec-head">推定栄養素（kcalに連動）</p>',
-                        unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            c1.metric("🥩 タンパク質", f"{nutr['protein']} g")
-            c2.metric("🧈 脂質",       f"{nutr['fat']} g")
-            c3, c4 = st.columns(2)
-            c3.metric("🍚 炭水化物",   f"{nutr['carbs']} g")
-            c4.metric("🥦 食物繊維",   f"{nutr['fiber']} g")
+            _n1, _n2, _n3, _n4 = st.columns(4)
+            _n1.metric("🥩 タンパク質", f"{nutr['protein']} g")
+            _n2.metric("🧈 脂質",       f"{nutr['fat']} g")
+            _n3.metric("🍚 炭水化物",   f"{nutr['carbs']} g")
+            _n4.metric("🥦 食物繊維",   f"{nutr['fiber']} g")
 
-    else:
+    else:  # 消費
         st.selectbox("🏋️ 活動", ACTIVITY_TYPES,
-                      key=f"w_activity_{fv}", on_change=_on_activity)
+                      key=f"w_activity_{_fv}", on_change=_on_activity)
         st.text_input("📝 メモ（任意）", placeholder="公園で実施など",
-                       key=f"w_memo_{fv}")
-        if f"w_kcal_{fv}" not in st.session_state:
-            st.session_state[f"w_kcal_{fv}"] = ACTIVITY_KCAL[ACTIVITY_TYPES[0]]
-        st.number_input("🔥 カロリー (kcal)", min_value=0, step=5, key=f"w_kcal_{fv}")
+                       key=f"w_memo_{_fv}")
+        if f"w_kcal_{_fv}" not in st.session_state:
+            st.session_state[f"w_kcal_{_fv}"] = ACTIVITY_KCAL[ACTIVITY_TYPES[0]]
+        st.number_input("🔥 カロリー (kcal)", min_value=0, step=5, key=f"w_kcal_{_fv}")
 
     st.divider()
-
-    # ── 目標カロリー設定 ──────────────────────────────────────────────────────
-    with st.expander("⚙️ 目標カロリーを設定"):
-        _cur = int(st.session_state.settings.get("目標カロリー", str(_bmr)))
-        _new = st.number_input(
-            "基礎代謝 / 目標摂取カロリー (kcal)",
-            min_value=1000, max_value=5000, step=10, value=_cur,
-            help="消費カロリー = この値 + 運動消費。デフォルト 1630 kcal",
-        )
-        if st.button("設定を保存", key="save_settings_btn"):
-            st.session_state.settings["目標カロリー"] = str(_new)
-            save_settings(st.session_state.settings)
-            st.session_state.settings = load_settings()  # 再読み込みで確定
-            st.toast(f"✅ 目標カロリーを {_new} kcal に設定しました", icon="⚙️")
-            st.rerun()
-
-    if st.button("✨ 保存する", use_container_width=True, type="primary"):
-        kcal_now  = st.session_state.get(f"w_kcal_{fv}", 0) or 0
-        _sel      = st.session_state.get(f"food_sel_{fv}", "")
-        _txt      = st.session_state.get(f"w_food_text_{fv}", "")
+    if st.button("✨ 保存する", use_container_width=True, type="primary",
+                 key=f"dialog_save_{_fv}"):
+        kcal_now  = st.session_state.get(f"w_kcal_{_fv}", 0) or 0
+        _sel      = st.session_state.get(f"food_sel_{_fv}", "")
+        _txt      = st.session_state.get(f"w_food_text_{_fv}", "")
         food_save = _sel if _sel else _txt
-        act_sel  = st.session_state.get(f"w_activity_{fv}", ACTIVITY_TYPES[0])
-        memo     = st.session_state.get(f"w_memo_{fv}", "")
-        if st.session_state.get(f"w_use_today_{fv}", True):
+        act_sel   = st.session_state.get(f"w_activity_{_fv}", ACTIVITY_TYPES[0])
+        memo      = st.session_state.get(f"w_memo_{_fv}", "")
+        if st.session_state.get(f"w_use_today_{_fv}", True):
             date_val = _date.today()
         else:
-            date_val = st.session_state.get(f"w_date_{fv}", _date.today())
-        meal_val = st.session_state.get(f"w_meal_{fv}", MEAL_TIMES[0])
-        nutr_now = st.session_state[f"nutr_{fv}"]
+            date_val = st.session_state.get(f"w_date_{_fv}", _date.today())
+        meal_val = st.session_state.get(f"w_meal_{_fv}", MEAL_TIMES[0])
+        nutr_now = st.session_state[f"nutr_{_fv}"]
         is_c     = food_save not in NUTRITION
 
         err = None
@@ -792,10 +943,10 @@ with st.sidebar:
                     "日付": str(date_val), "種別": "摂取",
                     "食事": meal_val, "食べ物": food_save,
                     "カロリー(kcal)": str(kcal_now),
-                    "タンパク質(g)": str(st.session_state.get(f"w_np_{fv}",  nutr_now["protein"]) if is_c else nutr_now["protein"]),
-                    "脂質(g)":       str(st.session_state.get(f"w_nf_{fv}",  nutr_now["fat"])     if is_c else nutr_now["fat"]),
-                    "炭水化物(g)":   str(st.session_state.get(f"w_nc_{fv}",  nutr_now["carbs"])   if is_c else nutr_now["carbs"]),
-                    "食物繊維(g)":   str(st.session_state.get(f"w_nfi_{fv}", nutr_now["fiber"])   if is_c else nutr_now["fiber"]),
+                    "タンパク質(g)": str(st.session_state.get(f"w_np_{_fv}", nutr_now["protein"]) if is_c else nutr_now["protein"]),
+                    "脂質(g)":       str(st.session_state.get(f"w_nf_{_fv}", nutr_now["fat"])     if is_c else nutr_now["fat"]),
+                    "炭水化物(g)":   str(st.session_state.get(f"w_nc_{_fv}", nutr_now["carbs"])   if is_c else nutr_now["carbs"]),
+                    "食物繊維(g)":   str(st.session_state.get(f"w_nfi_{_fv}", nutr_now["fiber"])  if is_c else nutr_now["fiber"]),
                 }
             else:
                 row = {
@@ -805,12 +956,33 @@ with st.sidebar:
                     "タンパク質(g)": "0", "脂質(g)": "0",
                     "炭水化物(g)": "0", "食物繊維(g)": "0",
                 }
-            updated = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+            updated = pd.concat([st.session_state.df, pd.DataFrame([row])],
+                                 ignore_index=True)
             save_df(updated)
             st.session_state.df = updated
-            df = updated
-            st.session_state.ss_saved = True
+            st.toast("✅ 保存しました！", icon="🌿")
             st.session_state.fv += 1
+            st.rerun()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# サイドバー（設定のみ）
+# ─────────────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown('<p class="grad-title">🌿 Calolie</p>', unsafe_allow_html=True)
+    st.divider()
+    with st.expander("⚙️ 目標カロリーを設定"):
+        _cur = int(st.session_state.settings.get("目標カロリー", str(_bmr)))
+        _new = st.number_input(
+            "基礎代謝 / 目標摂取カロリー (kcal)",
+            min_value=1000, max_value=5000, step=10, value=_cur,
+            help="消費カロリー = この値 + 運動消費。デフォルト 1630 kcal",
+        )
+        if st.button("設定を保存", key="save_settings_btn"):
+            st.session_state.settings["目標カロリー"] = str(_new)
+            save_settings(st.session_state.settings)
+            st.session_state.settings = load_settings()
+            st.toast(f"✅ 目標カロリーを {_new} kcal に設定しました", icon="⚙️")
             st.rerun()
 
 
@@ -834,8 +1006,22 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-tab_bal, tab_log, tab_weight, tab_nutr, tab_graph = st.tabs(
-    ["📊 収支", "📝 記録・編集", "⚖️ 体重", "🧬 栄養素", "📈 グラフ"])
+# ── ダイアログ自動オープン（初回のみ）＋ 記録ボタン ─────────────────────────
+if not st.session_state.dialog_init:
+    st.session_state.dialog_init = True
+    st.session_state.show_input_dialog = True
+
+_btn_c1, _btn_c2, _btn_c3 = st.columns([1, 2, 1])
+with _btn_c2:
+    if st.button("➕ 食事・運動を記録する", type="primary",
+                 use_container_width=True, key="open_dialog_btn"):
+        st.session_state.show_input_dialog = True
+
+if st.session_state.pop("show_input_dialog", False):
+    _input_dialog()
+
+tab_bal, tab_log, tab_weight, tab_nutr, tab_graph, tab_ergo = st.tabs(
+    ["📊 収支", "📝 記録・編集", "⚖️ 体重", "🧬 栄養素", "📈 グラフ", "🚣 エルゴ"])
 
 today_str = str(_date.today())
 
@@ -1342,7 +1528,167 @@ with tab_nutr:
 with tab_graph:
     fig = build_calorie_figure(df, bmr_kcal=_bmr)
     if fig is None:
-        st.info("記録がありません。サイドバーからデータを追加してください 🌿")
+        st.info("記録がありません。上の「➕ 食事・運動を記録する」から追加してください 🌿")
     else:
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tab 6: エルゴ
+# ─────────────────────────────────────────────────────────────────────────────
+with tab_ergo:
+    ergodf  = st.session_state.ergo_df
+    _efv    = st.session_state.ergofv
+    _e_saved = st.session_state.pop("ergo_saved", False)
+
+    # ── 入力フォーム ──────────────────────────────────────────────────────────
+    with st.expander("➕ エルゴを記録する",
+                     expanded=(ergodf.empty and not _e_saved)):
+
+        # 距離はフォーム外（変更で即リレンダー）
+        _edist = st.selectbox(
+            "🚣 距離", ERGO_DISTANCES,
+            index=ERGO_DISTANCES.index(3000),
+            key=f"ergo_dist_{_efv}",
+        )
+        _active_splits = list(range(500, _edist + 1, 500))
+
+        with st.form(f"ergo_form_{_efv}"):
+            _ec1, _ec2 = st.columns(2)
+            with _ec1:
+                _edate = st.date_input("📅 日付", value=_date.today(),
+                                       key=f"ergo_date_{_efv}")
+            with _ec2:
+                _etotal = st.text_input(
+                    "⏱️ トータルタイム (M:SS)",
+                    placeholder="例: 12:30",
+                    key=f"ergo_total_{_efv}",
+                )
+
+            st.markdown("**500m ごとのスプリット**")
+            _hc1, _hc2, _hc3 = st.columns([1, 2, 1])
+            _hc1.markdown("**区間**")
+            _hc2.markdown("**タイム (M:SS)**")
+            _hc3.markdown("**レート (SPM)**")
+
+            _splits_data = []
+            for _sd in _active_splits:
+                _rc1, _rc2, _rc3 = st.columns([1, 2, 1])
+                with _rc1:
+                    st.markdown(f"**{_sd}m**")
+                with _rc2:
+                    _t = st.text_input(
+                        "タイム", placeholder="1:55",
+                        label_visibility="collapsed",
+                        key=f"ergo_t_{_sd}_{_efv}",
+                    )
+                with _rc3:
+                    _r = st.number_input(
+                        "レート", min_value=0, max_value=50, step=1,
+                        value=0, label_visibility="collapsed",
+                        key=f"ergo_r_{_sd}_{_efv}",
+                    )
+                _splits_data.append((_sd, _t, _r))
+
+            _ememo = st.text_input("📝 メモ（任意）",
+                                   placeholder="例: レート17で統一",
+                                   key=f"ergo_memo_{_efv}")
+
+            if st.form_submit_button("記録する", type="primary",
+                                     use_container_width=True):
+                # トータルタイム未入力 → スプリット合計で計算
+                _total_sec = _time_to_sec(_etotal)
+                if _total_sec is None:
+                    _sum = sum(
+                        _time_to_sec(_t) or 0
+                        for _, _t, _ in _splits_data
+                    )
+                    _etotal_save = _sec_to_mmss(_sum) if _sum > 0 else ""
+                else:
+                    _etotal_save = _etotal.strip()
+
+                if not _etotal_save and not any(_t for _, _t, _ in _splits_data):
+                    st.error("タイムを入力してください。")
+                else:
+                    _erow = {c: "" for c in ERGO_COLS}
+                    _erow["日付"]           = str(_edate)
+                    _erow["距離(m)"]        = str(_edist)
+                    _erow["トータルタイム"] = _etotal_save
+                    _erow["メモ"]           = _ememo
+                    for _sd, _t, _r in _splits_data:
+                        _erow[f"{_sd}m_タイム"] = _t
+                        _erow[f"{_sd}m_レート"] = str(_r) if _r > 0 else ""
+                    updated_e = pd.concat(
+                        [ergodf, pd.DataFrame([_erow])], ignore_index=True
+                    )
+                    save_ergo_df(updated_e)
+                    st.session_state.ergo_df = updated_e
+                    st.toast("✅ エルゴ記録を保存しました！", icon="🚣")
+                    st.session_state.ergo_saved = True
+                    st.session_state.ergofv += 1
+                    st.rerun()
+
+    # ── 記録一覧 ──────────────────────────────────────────────────────────────
+    if ergodf.empty:
+        st.info("まだエルゴの記録がありません。上のフォームから追加してください 🚣")
+    else:
+        st.markdown("### 📋 記録一覧")
+        _disp = ergodf[["日付", "距離(m)", "トータルタイム", "メモ"]].copy()
+        _disp.index = range(1, len(_disp) + 1)
+        st.dataframe(_disp, use_container_width=True)
+
+        with st.expander("🗑️ エルゴ記録を削除する"):
+            _del_opts = [
+                f"{r['日付']} — {r['距離(m)']}m — {r['トータルタイム']}"
+                for _, r in ergodf.iterrows()
+            ]
+            _di_e = st.selectbox("削除する行", range(len(_del_opts)),
+                                  format_func=lambda i: _del_opts[i],
+                                  key="del_ergo")
+            if st.button("削除", type="secondary", key="del_ergo_btn"):
+                _upd_e = ergodf.drop(index=_di_e).reset_index(drop=True)
+                save_ergo_df(_upd_e)
+                st.session_state.ergo_df = _upd_e
+                st.success("削除しました。")
+                st.rerun()
+
+        # ── グラフ ────────────────────────────────────────────────────────────
+        st.markdown("### 📈 グラフ")
+        _edist_filter = st.selectbox(
+            "距離でフィルタ", ERGO_DISTANCES,
+            index=ERGO_DISTANCES.index(3000),
+            key="ergo_graph_dist",
+            format_func=lambda d: f"{d}m",
+        )
+        _esub = ergodf[ergodf["距離(m)"] == str(_edist_filter)].copy()
+
+        if _esub.empty:
+            st.info(f"{_edist_filter}m の記録がまだありません。")
+        else:
+            # タイム推移グラフ
+            _fig_trend = build_ergo_trend_figure(_esub, _edist_filter)
+            if _fig_trend:
+                st.pyplot(_fig_trend, use_container_width=True)
+                plt.close(_fig_trend)
+
+            # スプリット詳細グラフ
+            st.markdown("**スプリット詳細**")
+            _sess_labels = [
+                f"{r['日付']}  {r['トータルタイム']}"
+                for _, r in _esub.reset_index(drop=True).iterrows()
+            ]
+            _sel_sess = st.selectbox(
+                "セッションを選択", range(len(_sess_labels)),
+                format_func=lambda i: _sess_labels[i],
+                index=len(_sess_labels) - 1,
+                key="ergo_split_sess",
+            )
+            _fig_split = build_ergo_split_figure(
+                _esub.reset_index(drop=True).iloc[_sel_sess], _edist_filter
+            )
+            if _fig_split:
+                st.pyplot(_fig_split, use_container_width=True)
+                plt.close(_fig_split)
+            else:
+                st.info("スプリットデータがありません。記録時に入力してください。")
