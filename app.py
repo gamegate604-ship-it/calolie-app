@@ -54,6 +54,7 @@ NUTRITION: dict[str, dict[str, float]] = {
     "牛ステーキ(150g)":       {"kcal": 393, "protein": 30.5, "fat": 30.0, "carbs":  0.5, "fiber": 0.0},
     "唐揚げ(3個100g)":        {"kcal": 307, "protein": 18.7, "fat": 21.0, "carbs": 11.5, "fiber": 0.3},
     "唐揚げ定食":             {"kcal": 750, "protein": 27.0, "fat": 22.0, "carbs": 95.0, "fiber": 2.5},
+    "お好み焼き(1枚)":        {"kcal": 320, "protein": 15.0, "fat": 11.0, "carbs": 40.0, "fiber": 2.5},
     "卵(Mサイズ1個)":         {"kcal":  76, "protein":  6.2, "fat":  5.2, "carbs":  0.2, "fiber": 0.0},
     "卵2個":                  {"kcal": 152, "protein": 12.4, "fat": 10.4, "carbs":  0.4, "fiber": 0.0},
     "豆腐(絹150g)":           {"kcal":  80, "protein":  7.4, "fat":  4.2, "carbs":  2.1, "fiber": 0.2},
@@ -83,6 +84,9 @@ NUTRITION: dict[str, dict[str, float]] = {
 FOOD_OPTIONS = sorted(NUTRITION.keys())
 _DFLT_FOOD   = "バナナ(1本100g)"
 _DFLT_IDX    = FOOD_OPTIONS.index(_DFLT_FOOD)
+
+# ご飯1杯追加分の栄養素（ご飯(1杯160g) から）
+_RICE_ADD = {"kcal": 269, "protein": 4.1, "fat": 0.5, "carbs": 59.4, "fiber": 0.5}
 
 # 栄養素の1日目標値（成人女性・運動習慣あり）
 NUTR_TGT = {"protein": 60, "fat": 50, "carbs": 230, "fiber": 18}
@@ -125,7 +129,6 @@ def _get_ws(sheet_name: str, cols: list) -> gspread.Worksheet:
 FOOD_SHEET_NAME   = "食事記録"
 WEIGHT_SHEET_NAME = "体重記録"
 SETTINGS_SHEET    = "設定"
-FAVORITES_SHEET   = "お気に入り"
 CONDITION_SHEET   = "コンディション記録"
 CONDITION_COLS    = ["日付", "コンディション", "メモ"]
 COND_EMOJI  = {1: "😩", 2: "😕", 3: "😐", 4: "😊", 5: "😄"}
@@ -221,23 +224,6 @@ def save_settings(d: dict):
     ws = _get_ws(SETTINGS_SHEET, ["項目", "値"])
     ws.clear()
     ws.update([["項目", "値"]] + [[k, v] for k, v in d.items()])
-
-
-def load_favorites() -> list:
-    try:
-        ws   = _get_ws(FAVORITES_SHEET, ["食べ物"])
-        rows = ws.get_all_values()
-        if len(rows) <= 1:
-            return []
-        return [r[0] for r in rows[1:] if r and r[0]]
-    except Exception:
-        return []
-
-
-def save_favorites(favs: list):
-    ws = _get_ws(FAVORITES_SHEET, ["食べ物"])
-    ws.clear()
-    ws.update([["食べ物"]] + [[f] for f in favs])
 
 
 def load_cond_df() -> pd.DataFrame:
@@ -677,7 +663,7 @@ html,body,[class*="css"]{font-family:'Hiragino Sans','Noto Sans JP','Yu Gothic',
 # ─────────────────────────────────────────────────────────────────────────────
 for _k, _v in [("df", None), ("wdf", None), ("cdf", None), ("ergo_df", None),
                ("fv", 0), ("wfv", 0), ("ergofv", 0), ("ss_saved", False),
-               ("settings", None), ("favorites", None), ("dialog_init", False)]:
+               ("settings", None), ("dialog_init", False)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -687,8 +673,6 @@ if st.session_state.wdf is None:
     st.session_state.wdf = load_weight_df()
 if st.session_state.settings is None:
     st.session_state.settings = load_settings()
-if st.session_state.favorites is None:
-    st.session_state.favorites = load_favorites()
 if st.session_state.cdf is None:
     st.session_state.cdf = load_cond_df()
 if st.session_state.ergo_df is None:
@@ -757,14 +741,6 @@ def _on_activity():
     st.session_state[f"w_kcal_{fv}"] = ACTIVITY_KCAL.get(act, 0)
 
 
-def _on_fav_select():
-    chosen = st.session_state.get(f"w_fav_{fv}", "")
-    if chosen and chosen in NUTRITION:
-        st.session_state[f"food_sel_{fv}"] = chosen
-        st.session_state[f"w_kcal_{fv}"]   = NUTRITION[chosen]["kcal"]
-        st.session_state[f"nutr_{fv}"]     = _nutr(chosen)
-
-
 df  = st.session_state.df
 wdf = st.session_state.wdf
 cdf = st.session_state.cdf
@@ -810,18 +786,6 @@ def _input_dialog():
     if kind_val == "摂取":
         st.selectbox("🕐 タイミング", MEAL_TIMES, key=f"w_meal_{_fv}")
 
-        # お気に入り
-        _favs = st.session_state.favorites
-        if _favs:
-            _fav_opts = ["⭐ お気に入りから選ぶ"] + _favs
-            if f"w_fav_{_fv}" not in st.session_state:
-                st.session_state[f"w_fav_{_fv}"] = _fav_opts[0]
-            st.selectbox(
-                "お気に入り", _fav_opts,
-                key=f"w_fav_{_fv}", label_visibility="collapsed",
-                on_change=_on_fav_select,
-            )
-
         st.markdown("**食べ物を検索**")
         for _k, _v in [(f"food_sel_{_fv}", ""), (f"food_matches_{_fv}", [])]:
             if _k not in st.session_state:
@@ -863,19 +827,13 @@ def _input_dialog():
         is_preset = food_save in NUTRITION
         is_custom = bool(food_save) and not is_preset
 
+        # ご飯追加チェックボックス
+        _add_rice = False
         if food_save:
-            _in_favs = food_save in st.session_state.favorites
-            _fc1, _fc2 = st.columns([1, 3])
-            if _in_favs:
-                if _fc1.button("★ 削除", key=f"unfav_{_fv}"):
-                    st.session_state.favorites.remove(food_save)
-                    save_favorites(st.session_state.favorites)
-                    st.rerun()
-            else:
-                if _fc1.button("☆ お気に入り", key=f"fav_{_fv}"):
-                    st.session_state.favorites.append(food_save)
-                    save_favorites(st.session_state.favorites)
-                    st.rerun()
+            _add_rice = st.checkbox(
+                f"🍚 ご飯を追加（+{_RICE_ADD['kcal']} kcal）",
+                key=f"w_add_rice_{_fv}",
+            )
 
         st.number_input("🔥 カロリー (kcal)",
                          min_value=0, step=5, key=f"w_kcal_{_fv}", on_change=_on_kcal)
@@ -938,15 +896,22 @@ def _input_dialog():
         if err:
             st.error(err)
         else:
+            _add_rice = st.session_state.get(f"w_add_rice_{_fv}", False)
+            _re = _RICE_ADD if _add_rice else {k: 0 for k in _RICE_ADD}
             if kind_val == "摂取":
+                _p  = float(st.session_state.get(f"w_np_{_fv}",  nutr_now["protein"]) if is_c else nutr_now["protein"])
+                _f  = float(st.session_state.get(f"w_nf_{_fv}",  nutr_now["fat"])     if is_c else nutr_now["fat"])
+                _c  = float(st.session_state.get(f"w_nc_{_fv}",  nutr_now["carbs"])   if is_c else nutr_now["carbs"])
+                _fi = float(st.session_state.get(f"w_nfi_{_fv}", nutr_now["fiber"])   if is_c else nutr_now["fiber"])
                 row = {
                     "日付": str(date_val), "種別": "摂取",
-                    "食事": meal_val, "食べ物": food_save,
-                    "カロリー(kcal)": str(kcal_now),
-                    "タンパク質(g)": str(st.session_state.get(f"w_np_{_fv}", nutr_now["protein"]) if is_c else nutr_now["protein"]),
-                    "脂質(g)":       str(st.session_state.get(f"w_nf_{_fv}", nutr_now["fat"])     if is_c else nutr_now["fat"]),
-                    "炭水化物(g)":   str(st.session_state.get(f"w_nc_{_fv}", nutr_now["carbs"])   if is_c else nutr_now["carbs"]),
-                    "食物繊維(g)":   str(st.session_state.get(f"w_nfi_{_fv}", nutr_now["fiber"])  if is_c else nutr_now["fiber"]),
+                    "食事": meal_val,
+                    "食べ物": food_save + ("＋ご飯" if _add_rice else ""),
+                    "カロリー(kcal)": str(kcal_now + _re["kcal"]),
+                    "タンパク質(g)": str(round(_p  + _re["protein"], 1)),
+                    "脂質(g)":       str(round(_f  + _re["fat"],     1)),
+                    "炭水化物(g)":   str(round(_c  + _re["carbs"],   1)),
+                    "食物繊維(g)":   str(round(_fi + _re["fiber"],   1)),
                 }
             else:
                 row = {
