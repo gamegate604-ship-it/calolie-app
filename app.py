@@ -665,7 +665,7 @@ html,body,[class*="css"]{font-family:'Hiragino Sans','Noto Sans JP','Yu Gothic',
 # ─────────────────────────────────────────────────────────────────────────────
 for _k, _v in [("df", None), ("wdf", None), ("cdf", None), ("ergo_df", None),
                ("fv", 0), ("wfv", 0), ("ergofv", 0), ("ss_saved", False),
-               ("settings", None), ("dialog_init", False)]:
+               ("settings", None)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -761,176 +761,6 @@ if df is not None and not df.empty:
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 入力ダイアログ
-# ─────────────────────────────────────────────────────────────────────────────
-@st.dialog("📝 食事・運動を記録する", width="large")
-def _input_dialog():
-    _fv = st.session_state.fv
-
-    kind_raw = st.radio("種別", ["🍽️ 食事（摂取）", "🏃 運動（消費）"],
-                         horizontal=True, key=f"w_kind_{_fv}")
-    kind_val = "摂取" if "摂取" in kind_raw else "消費"
-
-    # 日付
-    _today = _date.today()
-    _dc1, _dc2 = st.columns([1, 1])
-    with _dc1:
-        _use_today = st.checkbox(
-            f"📅 今日（{_today.strftime('%m/%d')}）",
-            value=True, key=f"w_use_today_{_fv}"
-        )
-    if not _use_today:
-        with _dc2:
-            st.date_input("別の日付", value=_today, key=f"w_date_{_fv}",
-                          label_visibility="collapsed")
-
-    if kind_val == "摂取":
-        st.selectbox("🕐 タイミング", MEAL_TIMES, key=f"w_meal_{_fv}")
-
-        st.markdown("**食べ物を検索**")
-        for _k, _v in [(f"food_sel_{_fv}", ""), (f"food_matches_{_fv}", [])]:
-            if _k not in st.session_state:
-                st.session_state[_k] = _v
-        if f"w_kcal_{_fv}" not in st.session_state:
-            st.session_state[f"w_kcal_{_fv}"] = 0
-
-        st.text_input(
-            "食べ物を検索", placeholder="バナナ、鶏むね肉など…",
-            key=f"w_food_text_{_fv}", label_visibility="collapsed",
-            on_change=_on_food_search,
-        )
-
-        matches = st.session_state.get(f"food_matches_{_fv}", [])
-        if matches:
-            options = ["── 選択してください ──"] + matches
-            if f"w_food_preset_{_fv}" not in st.session_state:
-                st.session_state[f"w_food_preset_{_fv}"] = options[0]
-            st.selectbox(
-                "候補", options=options,
-                key=f"w_food_preset_{_fv}", label_visibility="collapsed",
-                on_change=_on_food_select,
-            )
-
-        sel       = st.session_state.get(f"food_sel_{_fv}", "")
-        food_text = st.session_state.get(f"w_food_text_{_fv}", "")
-        if sel:
-            _is_past = sel not in NUTRITION and sel in _past_foods
-            _badge   = "📝 履歴" if _is_past else "✅ プリセット"
-            _color   = "#EDE9FE" if _is_past else "#D1FAE5"
-            _tcolor  = "#5B21B6" if _is_past else "#065F46"
-            st.markdown(
-                f'<div style="background:{_color};border-radius:8px;padding:6px 12px;'
-                f'font-size:.84rem;font-weight:700;color:{_tcolor};margin:4px 0">'
-                f'{_badge} {sel}</div>',
-                unsafe_allow_html=True)
-
-        food_save = sel if sel else food_text
-        is_preset = food_save in NUTRITION
-        is_custom = bool(food_save) and not is_preset
-
-        # ご飯追加チェックボックス
-        _add_rice = False
-        if food_save:
-            _add_rice = st.checkbox(
-                f"🍚 ご飯を追加（+{_RICE_ADD['kcal']} kcal）",
-                key=f"w_add_rice_{_fv}",
-            )
-
-        st.number_input("🔥 カロリー (kcal)",
-                         min_value=0, step=5, key=f"w_kcal_{_fv}", on_change=_on_kcal)
-
-        nutr = st.session_state[f"nutr_{_fv}"]
-        if is_custom:
-            for _k, _v in [(f"w_np_{_fv}",  float(nutr["protein"])),
-                           (f"w_nf_{_fv}",  float(nutr["fat"])),
-                           (f"w_nc_{_fv}",  float(nutr["carbs"])),
-                           (f"w_nfi_{_fv}", float(nutr["fiber"]))]:
-                if _k not in st.session_state:
-                    st.session_state[_k] = _v
-            st.markdown("**栄養素（手動入力）**")
-            _n1, _n2 = st.columns(2)
-            with _n1:
-                st.number_input("タンパク質 g", min_value=0.0, step=0.1, key=f"w_np_{_fv}")
-                st.number_input("炭水化物 g",   min_value=0.0, step=0.1, key=f"w_nc_{_fv}")
-            with _n2:
-                st.number_input("脂質 g",     min_value=0.0, step=0.1, key=f"w_nf_{_fv}")
-                st.number_input("食物繊維 g", min_value=0.0, step=0.1, key=f"w_nfi_{_fv}")
-        elif is_preset:
-            _n1, _n2, _n3, _n4 = st.columns(4)
-            _n1.metric("🥩 タンパク質", f"{nutr['protein']} g")
-            _n2.metric("🧈 脂質",       f"{nutr['fat']} g")
-            _n3.metric("🍚 炭水化物",   f"{nutr['carbs']} g")
-            _n4.metric("🥦 食物繊維",   f"{nutr['fiber']} g")
-
-    else:  # 消費
-        st.selectbox("🏋️ 活動", ACTIVITY_TYPES,
-                      key=f"w_activity_{_fv}", on_change=_on_activity)
-        st.text_input("📝 メモ（任意）", placeholder="公園で実施など",
-                       key=f"w_memo_{_fv}")
-        if f"w_kcal_{_fv}" not in st.session_state:
-            st.session_state[f"w_kcal_{_fv}"] = ACTIVITY_KCAL[ACTIVITY_TYPES[0]]
-        st.number_input("🔥 カロリー (kcal)", min_value=0, step=5, key=f"w_kcal_{_fv}")
-
-    st.divider()
-    if st.button("✨ 保存する", use_container_width=True, type="primary",
-                 key=f"dialog_save_{_fv}"):
-        kcal_now  = st.session_state.get(f"w_kcal_{_fv}", 0) or 0
-        _sel      = st.session_state.get(f"food_sel_{_fv}", "")
-        _txt      = st.session_state.get(f"w_food_text_{_fv}", "")
-        food_save = _sel if _sel else _txt
-        act_sel   = st.session_state.get(f"w_activity_{_fv}", ACTIVITY_TYPES[0])
-        memo      = st.session_state.get(f"w_memo_{_fv}", "")
-        if st.session_state.get(f"w_use_today_{_fv}", True):
-            date_val = _date.today()
-        else:
-            date_val = st.session_state.get(f"w_date_{_fv}", _date.today())
-        meal_val = st.session_state.get(f"w_meal_{_fv}", MEAL_TIMES[0])
-        nutr_now = st.session_state[f"nutr_{_fv}"]
-        is_c     = food_save not in NUTRITION
-
-        err = None
-        if kind_val == "摂取" and not food_save:
-            err = "食べ物名を入力してください。"
-        elif kcal_now <= 0:
-            err = "カロリーを入力してください。"
-
-        if err:
-            st.error(err)
-        else:
-            _add_rice = st.session_state.get(f"w_add_rice_{_fv}", False)
-            _re = _RICE_ADD if _add_rice else {k: 0 for k in _RICE_ADD}
-            if kind_val == "摂取":
-                _p  = float(st.session_state.get(f"w_np_{_fv}",  nutr_now["protein"]) if is_c else nutr_now["protein"])
-                _f  = float(st.session_state.get(f"w_nf_{_fv}",  nutr_now["fat"])     if is_c else nutr_now["fat"])
-                _c  = float(st.session_state.get(f"w_nc_{_fv}",  nutr_now["carbs"])   if is_c else nutr_now["carbs"])
-                _fi = float(st.session_state.get(f"w_nfi_{_fv}", nutr_now["fiber"])   if is_c else nutr_now["fiber"])
-                row = {
-                    "日付": str(date_val), "種別": "摂取",
-                    "食事": meal_val,
-                    "食べ物": food_save + ("＋ご飯" if _add_rice else ""),
-                    "カロリー(kcal)": str(kcal_now + _re["kcal"]),
-                    "タンパク質(g)": str(round(_p  + _re["protein"], 1)),
-                    "脂質(g)":       str(round(_f  + _re["fat"],     1)),
-                    "炭水化物(g)":   str(round(_c  + _re["carbs"],   1)),
-                    "食物繊維(g)":   str(round(_fi + _re["fiber"],   1)),
-                }
-            else:
-                row = {
-                    "日付": str(date_val), "種別": "消費",
-                    "食事": act_sel, "食べ物": memo or act_sel,
-                    "カロリー(kcal)": str(kcal_now),
-                    "タンパク質(g)": "0", "脂質(g)": "0",
-                    "炭水化物(g)": "0", "食物繊維(g)": "0",
-                }
-            updated = pd.concat([st.session_state.df, pd.DataFrame([row])],
-                                 ignore_index=True)
-            save_df(updated)
-            st.session_state.df = updated
-            st.toast("✅ 保存しました！", icon="🌿")
-            st.session_state.fv += 1
-            st.rerun()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # サイドバー（設定のみ）
@@ -973,19 +803,176 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── ダイアログ自動オープン（初回のみ）＋ 記録ボタン ─────────────────────────
-if not st.session_state.dialog_init:
-    st.session_state.dialog_init = True
-    st.session_state.show_input_dialog = True
+# ─────────────────────────────────────────────────────────────────────────────
+# 入力フォーム（インライン・フルワイド）
+# ─────────────────────────────────────────────────────────────────────────────
+with st.container(border=True):
+    st.markdown("### 📝 今日の記録を追加")
 
-_btn_c1, _btn_c2, _btn_c3 = st.columns([1, 2, 1])
-with _btn_c2:
-    if st.button("➕ 食事・運動を記録する", type="primary",
-                 use_container_width=True, key="open_dialog_btn"):
-        st.session_state.show_input_dialog = True
+    kind_raw = st.radio(
+        "種別", ["🍽️ 食事（摂取）", "🏃 運動（消費）"],
+        horizontal=True, key=f"w_kind_{fv}", label_visibility="collapsed",
+    )
+    kind_val = "摂取" if "摂取" in kind_raw else "消費"
 
-if st.session_state.pop("show_input_dialog", False):
-    _input_dialog()
+    # 日付
+    _today = _date.today()
+    _use_today = st.checkbox(
+        f"📅 今日の記録（{_today.strftime('%Y年%-m月%-d日')}）",
+        value=True, key=f"w_use_today_{fv}",
+    )
+    if not _use_today:
+        st.date_input("別の日付を選択", value=_today, key=f"w_date_{fv}")
+
+    if kind_val == "摂取":
+        st.selectbox("🕐 食事のタイミング", MEAL_TIMES, key=f"w_meal_{fv}")
+
+        # オートコンプリート
+        for _k, _v in [(f"food_sel_{fv}", ""), (f"food_matches_{fv}", [])]:
+            if _k not in st.session_state:
+                st.session_state[_k] = _v
+        if f"w_kcal_{fv}" not in st.session_state:
+            st.session_state[f"w_kcal_{fv}"] = 0
+
+        st.text_input(
+            "🍱 食べ物を入力（キーワード検索）",
+            placeholder="例: バナナ、鶏むね、定食、たこ焼き…",
+            key=f"w_food_text_{fv}",
+            on_change=_on_food_search,
+        )
+
+        matches = st.session_state.get(f"food_matches_{fv}", [])
+        if matches:
+            options = ["── 選択してください ──"] + matches
+            if f"w_food_preset_{fv}" not in st.session_state:
+                st.session_state[f"w_food_preset_{fv}"] = options[0]
+            st.selectbox(
+                "📋 候補から選ぶ", options=options,
+                key=f"w_food_preset_{fv}",
+                on_change=_on_food_select,
+            )
+
+        sel       = st.session_state.get(f"food_sel_{fv}", "")
+        food_text = st.session_state.get(f"w_food_text_{fv}", "")
+        if sel:
+            _is_past = sel not in NUTRITION and sel in _past_foods
+            _badge   = "📝 過去の記録" if _is_past else "✅ プリセット"
+            _color   = "#EDE9FE" if _is_past else "#D1FAE5"
+            _tcolor  = "#5B21B6" if _is_past else "#065F46"
+            st.markdown(
+                f'<div style="background:{_color};border-radius:10px;padding:10px 16px;'
+                f'font-size:1rem;font-weight:700;color:{_tcolor};margin:8px 0">'
+                f'{_badge}　{sel}</div>',
+                unsafe_allow_html=True)
+
+        food_save = sel if sel else food_text
+        is_preset = food_save in NUTRITION
+        is_custom = bool(food_save) and not is_preset
+
+        if food_save:
+            st.checkbox(
+                f"🍚 ご飯を追加（+{_RICE_ADD['kcal']} kcal）",
+                key=f"w_add_rice_{fv}",
+            )
+
+        st.number_input(
+            "🔥 カロリー (kcal)",
+            min_value=0, step=5,
+            key=f"w_kcal_{fv}", on_change=_on_kcal,
+        )
+
+        nutr = st.session_state[f"nutr_{fv}"]
+        if is_custom:
+            for _k, _v in [(f"w_np_{fv}",  float(nutr["protein"])),
+                           (f"w_nf_{fv}",  float(nutr["fat"])),
+                           (f"w_nc_{fv}",  float(nutr["carbs"])),
+                           (f"w_nfi_{fv}", float(nutr["fiber"]))]:
+                if _k not in st.session_state:
+                    st.session_state[_k] = _v
+            st.markdown("**栄養素（手動入力）**")
+            _n1, _n2 = st.columns(2)
+            with _n1:
+                st.number_input("タンパク質 g", min_value=0.0, step=0.1, key=f"w_np_{fv}")
+                st.number_input("炭水化物 g",   min_value=0.0, step=0.1, key=f"w_nc_{fv}")
+            with _n2:
+                st.number_input("脂質 g",       min_value=0.0, step=0.1, key=f"w_nf_{fv}")
+                st.number_input("食物繊維 g",   min_value=0.0, step=0.1, key=f"w_nfi_{fv}")
+        elif is_preset:
+            _n1, _n2, _n3, _n4 = st.columns(4)
+            _n1.metric("🥩 タンパク質", f"{nutr['protein']} g")
+            _n2.metric("🧈 脂質",       f"{nutr['fat']} g")
+            _n3.metric("🍚 炭水化物",   f"{nutr['carbs']} g")
+            _n4.metric("🥦 食物繊維",   f"{nutr['fiber']} g")
+
+    else:  # 消費
+        st.selectbox("🏋️ 活動の種類", ACTIVITY_TYPES,
+                      key=f"w_activity_{fv}", on_change=_on_activity)
+        st.text_input("📝 メモ（任意）", placeholder="公園で実施など",
+                       key=f"w_memo_{fv}")
+        if f"w_kcal_{fv}" not in st.session_state:
+            st.session_state[f"w_kcal_{fv}"] = ACTIVITY_KCAL[ACTIVITY_TYPES[0]]
+        st.number_input("🔥 カロリー (kcal)", min_value=0, step=5,
+                         key=f"w_kcal_{fv}")
+
+    if st.button("✨ 保存する", use_container_width=True, type="primary",
+                 key=f"save_{fv}"):
+        kcal_now  = st.session_state.get(f"w_kcal_{fv}", 0) or 0
+        _sel      = st.session_state.get(f"food_sel_{fv}", "")
+        _txt      = st.session_state.get(f"w_food_text_{fv}", "")
+        food_save = _sel if _sel else _txt
+        act_sel   = st.session_state.get(f"w_activity_{fv}", ACTIVITY_TYPES[0])
+        memo      = st.session_state.get(f"w_memo_{fv}", "")
+        if st.session_state.get(f"w_use_today_{fv}", True):
+            date_val = _date.today()
+        else:
+            date_val = st.session_state.get(f"w_date_{fv}", _date.today())
+        meal_val = st.session_state.get(f"w_meal_{fv}", MEAL_TIMES[0])
+        nutr_now = st.session_state[f"nutr_{fv}"]
+        is_c     = food_save not in NUTRITION
+
+        err = None
+        if kind_val == "摂取" and not food_save:
+            err = "食べ物名を入力してください。"
+        elif kcal_now <= 0:
+            err = "カロリーを入力してください。"
+
+        if err:
+            st.error(err)
+        else:
+            _add_rice = st.session_state.get(f"w_add_rice_{fv}", False)
+            _re = _RICE_ADD if _add_rice else {k: 0 for k in _RICE_ADD}
+            if kind_val == "摂取":
+                _p  = float(st.session_state.get(f"w_np_{fv}",  nutr_now["protein"]) if is_c else nutr_now["protein"])
+                _f  = float(st.session_state.get(f"w_nf_{fv}",  nutr_now["fat"])     if is_c else nutr_now["fat"])
+                _c  = float(st.session_state.get(f"w_nc_{fv}",  nutr_now["carbs"])   if is_c else nutr_now["carbs"])
+                _fi = float(st.session_state.get(f"w_nfi_{fv}", nutr_now["fiber"])   if is_c else nutr_now["fiber"])
+                row = {
+                    "日付": str(date_val), "種別": "摂取",
+                    "食事": meal_val,
+                    "食べ物": food_save + ("＋ご飯" if _add_rice else ""),
+                    "カロリー(kcal)": str(kcal_now + _re["kcal"]),
+                    "タンパク質(g)": str(round(_p  + _re["protein"], 1)),
+                    "脂質(g)":       str(round(_f  + _re["fat"],     1)),
+                    "炭水化物(g)":   str(round(_c  + _re["carbs"],   1)),
+                    "食物繊維(g)":   str(round(_fi + _re["fiber"],   1)),
+                }
+            else:
+                row = {
+                    "日付": str(date_val), "種別": "消費",
+                    "食事": act_sel, "食べ物": memo or act_sel,
+                    "カロリー(kcal)": str(kcal_now),
+                    "タンパク質(g)": "0", "脂質(g)": "0",
+                    "炭水化物(g)": "0", "食物繊維(g)": "0",
+                }
+            updated = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+            save_df(updated)
+            st.session_state.df = updated
+            df = updated
+            st.toast("✅ 保存しました！", icon="🌿")
+            st.session_state.fv += 1
+            st.rerun()
+
+st.divider()
 
 tab_bal, tab_log, tab_weight, tab_nutr, tab_graph, tab_ergo = st.tabs(
     ["📊 収支", "📝 記録・編集", "⚖️ 体重", "🧬 栄養素", "📈 グラフ", "🚣 エルゴ"])
