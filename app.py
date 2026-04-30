@@ -55,6 +55,8 @@ NUTRITION: dict[str, dict[str, float]] = {
     "唐揚げ(3個100g)":        {"kcal": 307, "protein": 18.7, "fat": 21.0, "carbs": 11.5, "fiber": 0.3},
     "唐揚げ定食":             {"kcal": 750, "protein": 27.0, "fat": 22.0, "carbs": 95.0, "fiber": 2.5},
     "お好み焼き(1枚)":        {"kcal": 320, "protein": 15.0, "fat": 11.0, "carbs": 40.0, "fiber": 2.5},
+    "たこ焼き(8個)":          {"kcal": 296, "protein": 11.2, "fat":  9.6, "carbs": 40.8, "fiber": 1.6},
+    "たこ焼き(10個)":         {"kcal": 370, "protein": 14.0, "fat": 12.0, "carbs": 51.0, "fiber": 2.0},
     "卵(Mサイズ1個)":         {"kcal":  76, "protein":  6.2, "fat":  5.2, "carbs":  0.2, "fiber": 0.0},
     "卵2個":                  {"kcal": 152, "protein": 12.4, "fat": 10.4, "carbs":  0.4, "fiber": 0.0},
     "豆腐(絹150g)":           {"kcal":  80, "protein":  7.4, "fat":  4.2, "carbs":  2.1, "fiber": 0.2},
